@@ -1,18 +1,21 @@
+import { config } from "dotenv";
 import { Sequelize } from "sequelize";
-import { configData } from "../config/config.js";
+config();
 
-export const sequelize = new Sequelize(configData.databaseUrl, {
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not defined");
+}
+
+export const sequelize = new Sequelize(databaseUrl, {
   dialect: "postgres",
-  protocol: "postgres",
   logging: false,
   dialectOptions: {
     ssl: {
       require: true,
       rejectUnauthorized: false,
     },
-  },
-  define: {
-    timestamps: true,
   },
 });
 
