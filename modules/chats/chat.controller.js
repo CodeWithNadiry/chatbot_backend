@@ -204,7 +204,12 @@ OUTPUT:
 
 export async function getAll(req, res, next) {
   try {
+    const userId = req.userId;
+
     const conversations = await Conversation.findAll({
+      where: {
+        userId,
+      },
       attributes: ["conversationId", "title"],
       order: [["createdAt", "DESC"]],
     });
@@ -217,9 +222,14 @@ export async function getAll(req, res, next) {
 
 export async function get(req, res, next) {
   try {
+    const userId = req.userId;
     const { id: conversationId } = req.params;
 
-    const conversation = await Conversation.findByPk(conversationId, {
+    const conversation = await Conversation.findOne({
+      where: {
+        conversationId,
+        userId,
+      },
       include: {
         model: Message,
         attributes: ["role", "content"],
