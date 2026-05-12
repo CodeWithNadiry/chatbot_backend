@@ -1,12 +1,16 @@
 import { Sequelize } from "sequelize";
 import { configData } from "../config/config.js";
 
-const { database, username, password, host, dialect } = configData;
-
-export const sequelize = new Sequelize(database, username, password, {
-  host,
-  dialect,
+export const sequelize = new Sequelize(configData.databaseUrl, {
+  dialect: "postgres",
+  protocol: "postgres",
   logging: false,
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false,
+    },
+  },
   define: {
     timestamps: true,
   },
