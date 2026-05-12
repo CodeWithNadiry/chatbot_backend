@@ -74,7 +74,7 @@ export async function handleQuery(req, res, next) {
     const lastMessagesHistory = await Message.findAll({
       where: { conversationId },
       order: [["createdAt", "DESC"]],
-      limit: 5, 
+      limit: 5,
     });
 
     const chatHistory = lastMessagesHistory
@@ -203,9 +203,11 @@ OUTPUT:
 }
 
 export async function getAll(req, res, next) {
+  console.log("all conversation running");
+
   try {
     const userId = req.userId;
-
+    console.log("userId", userId);
     const conversations = await Conversation.findAll({
       where: {
         userId,
@@ -224,7 +226,8 @@ export async function get(req, res, next) {
   try {
     const userId = req.userId;
     const { id: conversationId } = req.params;
-
+    console.log("userId:", req.userId);
+    console.log("conversationId:", req.params.id);
     const conversation = await Conversation.findOne({
       where: {
         conversationId,
