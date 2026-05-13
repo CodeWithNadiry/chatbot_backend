@@ -18,6 +18,16 @@ const Chunk = sequelize.define("chunk", {
     onDelete: "CASCADE", // if  a document is deleted, all related chunks will also be deleted.
   },
 
+  userId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: "users",
+      key: "userId",
+    },
+    onDelete: 'CASCADE'
+  },
+
   content: {
     type: DataTypes.TEXT,
     allowNull: false,

@@ -55,11 +55,12 @@ export async function ingest(req, res, next) {
             await sequelize.query(
               `
               INSERT INTO chunks
-              ("documentId", "chunkIndex", content, embedding, metadata)
-              VALUES ($1, $2, $3, $4::vector, $5)
+              ("chunkId", "userId", "documentId", "chunkIndex", content, embedding, metadata)
+              VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5::vector, $6)
               `,
               {
                 bind: [
+                  req.userId,
                   document.documentId,
                   i,
                   chunk,
@@ -86,7 +87,7 @@ export async function ingest(req, res, next) {
     );
 
     res.status(200).json({
-      message: `documents${files.length > 1 ? "s" : ""} uploaded successfully!`,
+      message: `document${files.length > 1 ? "s" : ""} uploaded successfully!`,
       documents: results,
     });
   } catch (error) {
