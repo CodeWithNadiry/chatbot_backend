@@ -6,7 +6,7 @@ import { isAuth } from "../../middleware/isAuth.js";
 
 const router = Router();
 
-router.post("/query", isAuth, validateRequest(chatSchema), handleQuery);
+router.post("/query", validateRequest(chatSchema), handleQuery);
 
 router.get('/:id', isAuth, get);
 
