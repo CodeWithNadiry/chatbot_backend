@@ -236,7 +236,7 @@ export async function get(req, res, next) {
         attributes: ["role", "content"],
       },
       // FIX: was DESC — messages should be in chronological (ASC) order
-      order: [[Message, "createdAt", "ASC"]],
+      order: [[Message, "createdAt", "DESC"]],
     });
 
     if (!conversation) {
