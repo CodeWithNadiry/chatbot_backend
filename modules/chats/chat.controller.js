@@ -5,16 +5,18 @@ import Document from "../../models/document.model.js";
 import { sequelize } from "../../db/client.js";
 import Conversation from "../../models/conversation.model.js";
 import Message from "../../models/message.model.js";
+import { QueryTypes } from "sequelize";
 
 config();
 
 export async function handleQuery(req, res, next) {
   try {
-    const { question, conversationId } = req.body;
+    const { question, conversationId: incomingConversationId } = req.body;
     const userId = req.userId;
 
     let conversation;
     let isNewConversation = false;
+    let conversationId = incomingConversationId;
 
     if (!conversationId) {
       isNewConversation = true;
@@ -38,7 +40,6 @@ export async function handleQuery(req, res, next) {
       }
     }
 
-    // 2. Save user message
     await Message.create({
       conversationId,
       role: "user",
@@ -46,14 +47,12 @@ export async function handleQuery(req, res, next) {
       content: question,
     });
 
-    // 3. Generate embedding
     const embedding = await generateEmbedding(question);
 
-    if (!Array.isArray(embedding)) {
+    if (!Array.isArray(embedding) || embedding.length === 0) {
       throw new Error("Invalid embedding format");
     }
 
-    // 4. VECTOR SEARCH (FIXED - CRITICAL)
     const results = await sequelize.query(
       `
       SELECT "chunkId", content
@@ -67,16 +66,20 @@ export async function handleQuery(req, res, next) {
           userId,
           embedding: `[${embedding.join(",")}]`,
         },
-        type: sequelize.QueryTypes.SELECT,
+        type: QueryTypes.SELECT,
       }
     );
 
-    const chunks = await Chunk.findAll({
-      where: {
-        chunkId: results.map((r) => r.chunkId),
-        userId, // extra safety layer
-      },
-    });
+    const chunkIds = results.map((r) => r.chunkId);
+
+    const chunks = chunkIds.length
+      ? await Chunk.findAll({
+          where: {
+            chunkId: chunkIds,
+            userId,
+          },
+        })
+      : [];
 
     const orderedChunks = results
       .map((r) => chunks.find((c) => c.chunkId === r.chunkId))
@@ -88,16 +91,14 @@ export async function handleQuery(req, res, next) {
 
     const lastMessagesHistory = await Message.findAll({
       where: { conversationId },
-      order: [["createdAt", "DESC"]],
+      order: [["createdAt", "ASC"]],
       limit: 5,
     });
 
     const chatHistory = lastMessagesHistory
-      .reverse()
       .map((m) => `${m.role}: ${m.content}`)
       .join("\n");
 
-    // 6. Call LLM
     const hfResponse = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
@@ -153,7 +154,6 @@ ${question}
       data?.generated_text ||
       "No response from model";
 
-    // 7. Save assistant message
     await Message.create({
       conversationId,
       role: "assistant",
@@ -161,7 +161,6 @@ ${question}
       content: answer,
     });
 
-    // 8. Generate title (first message only)
     let title = conversation.title;
 
     if (isNewConversation) {
@@ -178,8 +177,7 @@ ${question}
             messages: [
               {
                 role: "system",
-                content:
-                  "Generate a short title (max 6 words). No punctuation.",
+                content: "Generate a short title (max 6 words). No punctuation.",
               },
               {
                 role: "user",
@@ -191,12 +189,13 @@ ${question}
         }
       );
 
-      const titleData = await hfTitleResponse.json();
+      if (hfTitleResponse.ok) {
+        const titleData = await hfTitleResponse.json();
+        title =
+          titleData?.choices?.[0]?.message?.content?.trim() || "";
 
-      title =
-        titleData?.choices?.[0]?.message?.content?.trim() || "";
-
-      await conversation.update({ title });
+        await conversation.update({ title });
+      }
     }
 
     return res.json({
@@ -210,15 +209,11 @@ ${question}
 }
 
 export async function getAll(req, res, next) {
-  console.log("all conversation running");
-
   try {
     const userId = req.userId;
-    console.log("userId", userId);
+
     const conversations = await Conversation.findAll({
-      where: {
-        userId,
-      },
+      where: { userId },
       attributes: ["conversationId", "title"],
       order: [["createdAt", "DESC"]],
     });
@@ -233,8 +228,7 @@ export async function get(req, res, next) {
   try {
     const userId = req.userId;
     const { id: conversationId } = req.params;
-    console.log("userId:", req.userId);
-    console.log("conversationId:", req.params.id);
+
     const conversation = await Conversation.findOne({
       where: {
         conversationId,
@@ -244,7 +238,7 @@ export async function get(req, res, next) {
         model: Message,
         attributes: ["role", "content"],
       },
-      order: [[Message, "createdAt", "DESC"]],
+      order: [[Message, "createdAt", "ASC"]],
     });
 
     if (!conversation) {
