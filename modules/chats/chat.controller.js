@@ -1,15 +1,4 @@
 import { config } from "dotenv";
-import { Op } from "sequelize";
-
-import { generateEmbedding } from "../../utils/generateEmbedding.js";
-import Chunk from "../../models/chunk.model.js";
-import Document from "../../models/document.model.js";
-import { sequelize } from "../../db/client.js";
-import Conversation from "../../models/conversation.model.js";
-import Message from "../../models/message.model.js";
-
-config();
-import { config } from "dotenv";
 import { generateEmbedding } from "../../utils/generateEmbedding.js";
 import Chunk from "../../models/chunk.model.js";
 import Document from "../../models/document.model.js";
