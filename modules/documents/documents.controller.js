@@ -55,8 +55,8 @@ export async function ingest(req, res, next) {
             await sequelize.query(
               `
               INSERT INTO chunks
-              ("chunkId", "userId", "documentId", "chunkIndex", content, embedding, metadata)
-              VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5::vector, $6)
+              ("userId", "documentId", "chunkIndex", content, embedding, metadata)
+              VALUES ($1, $2, $3, $4, $5::vector, $6)
               `,
               {
                 bind: [
