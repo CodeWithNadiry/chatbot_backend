@@ -18,28 +18,34 @@ export async function handleQuery(req, res, next) {
     let isNewConversation = false;
     let conversationId = incomingConversationId;
 
+    // ── 1. Resolve or create conversation ──────────────────────────────────
     if (!conversationId) {
       isNewConversation = true;
-
-      conversation = await Conversation.create({
-        userId,
-        title: "",
-      });
-
+      conversation = await Conversation.create({ userId, title: "" });
       conversationId = conversation.conversationId;
     } else {
       conversation = await Conversation.findOne({
-        where: {
-          conversationId,
-          userId,
-        },
+        where: { conversationId, userId },
       });
-
       if (!conversation) {
         return res.status(404).json({ message: "Conversation not found" });
       }
     }
 
+    // ── 2. Fetch PREVIOUS history BEFORE saving the new user message ────────
+    //    FIX: was fetching history AFTER saving, so the current question was
+    //    always included in chatHistory, causing it to appear twice in the prompt.
+    const previousMessages = await Message.findAll({
+      where: { conversationId },
+      order: [["createdAt", "DESC"]],
+      limit: 10, // last 10 messages (5 turns) for context
+    });
+
+    const chatHistory = previousMessages
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`)
+      .join("\n");
+
+    // ── 3. Save the new user message ────────────────────────────────────────
     await Message.create({
       conversationId,
       role: "user",
@@ -47,6 +53,7 @@ export async function handleQuery(req, res, next) {
       content: question,
     });
 
+    // ── 4. Generate embedding & retrieve relevant chunks ───────────────────
     const embedding = await generateEmbedding(question);
 
     if (!Array.isArray(embedding) || embedding.length === 0) {
@@ -73,32 +80,20 @@ export async function handleQuery(req, res, next) {
     const chunkIds = results.map((r) => r.chunkId);
 
     const chunks = chunkIds.length
-      ? await Chunk.findAll({
-          where: {
-            chunkId: chunkIds,
-            userId,
-          },
-        })
+      ? await Chunk.findAll({ where: { chunkId: chunkIds, userId } })
       : [];
 
+    // Preserve similarity order returned by pgvector
     const orderedChunks = results
       .map((r) => chunks.find((c) => c.chunkId === r.chunkId))
       .filter(Boolean);
 
+    // FIX: trim each chunk to avoid whitespace noise in context
     const context = orderedChunks.length
-      ? orderedChunks.map((c) => c.content).join("\n\n")
+      ? orderedChunks.map((c) => c.content.trim()).join("\n\n---\n\n")
       : "No relevant document context found.";
 
-    const lastMessagesHistory = await Message.findAll({
-      where: { conversationId },
-      order: [["createdAt", "ASC"]],
-      limit: 5,
-    });
-
-    const chatHistory = lastMessagesHistory
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
-
+    // ── 5. Call the LLM ────────────────────────────────────────────────────
     const hfResponse = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
@@ -112,28 +107,34 @@ export async function handleQuery(req, res, next) {
           messages: [
             {
               role: "system",
+              // FIX: explicitly tell the model to avoid markdown so the
+              // frontend receives clean plain text without ** ## `` etc.
               content: `
 You are an intelligent RAG-based assistant.
 
-RULES:
-- Use ONLY the provided CONTEXT and CHAT HISTORY.
+STRICT RULES:
+- Use ONLY the provided CONTEXT and CHAT HISTORY to answer.
 - If no relevant context exists, say: "I don't have enough information in the documents."
-- Do NOT hallucinate facts outside context.
-- Be concise and helpful.
-`,
+- Do NOT hallucinate or add facts outside the context.
+- Be concise, accurate, and helpful.
+
+FORMATTING RULES (VERY IMPORTANT):
+- Reply in plain text only. NO markdown whatsoever.
+- Do NOT use ** for bold, * for italic, # for headings, or backticks for code.
+- Do NOT use bullet points with -, *, or numbered lists unless absolutely necessary.
+- Write in clear, natural sentences and paragraphs.
+`.trim(),
             },
             {
               role: "user",
               content: `
-CHAT HISTORY:
-${chatHistory}
-
+${chatHistory ? `CHAT HISTORY:\n${chatHistory}\n` : ""}
 CONTEXT:
 ${context}
 
 QUESTION:
 ${question}
-`,
+`.trim(),
             },
           ],
           temperature: 0.4,
@@ -144,16 +145,17 @@ ${question}
 
     if (!hfResponse.ok) {
       const errText = await hfResponse.text();
-      throw new Error(errText);
+      throw new Error(`HuggingFace API error: ${errText}`);
     }
 
     const data = await hfResponse.json();
 
     const answer =
-      data?.choices?.[0]?.message?.content ||
+      data?.choices?.[0]?.message?.content?.trim() ||
       data?.generated_text ||
       "No response from model";
 
+    // ── 6. Save assistant message ──────────────────────────────────────────
     await Message.create({
       conversationId,
       role: "assistant",
@@ -161,6 +163,7 @@ ${question}
       content: answer,
     });
 
+    // ── 7. Generate title for new conversations ────────────────────────────
     let title = conversation.title;
 
     if (isNewConversation) {
@@ -177,7 +180,9 @@ ${question}
             messages: [
               {
                 role: "system",
-                content: "Generate a short title (max 6 words). No punctuation.",
+                // FIX: added max_tokens so title cannot be excessively long
+                content:
+                  "Generate a short conversation title (maximum 6 words). Plain text only. No punctuation. No markdown.",
               },
               {
                 role: "user",
@@ -185,24 +190,19 @@ ${question}
               },
             ],
             temperature: 0.2,
+            max_tokens: 20, // FIX: was missing — title could be very long
           }),
         }
       );
 
       if (hfTitleResponse.ok) {
         const titleData = await hfTitleResponse.json();
-        title =
-          titleData?.choices?.[0]?.message?.content?.trim() || "";
-
+        title = titleData?.choices?.[0]?.message?.content?.trim() || "";
         await conversation.update({ title });
       }
     }
 
-    return res.json({
-      answer,
-      conversationId,
-      title,
-    });
+    return res.json({ answer, conversationId, title });
   } catch (error) {
     next(error);
   }
@@ -230,15 +230,13 @@ export async function get(req, res, next) {
     const { id: conversationId } = req.params;
 
     const conversation = await Conversation.findOne({
-      where: {
-        conversationId,
-        userId,
-      },
+      where: { conversationId, userId },
       include: {
         model: Message,
         attributes: ["role", "content"],
       },
-      order: [[Message, "createdAt", "DESC"]],
+      // FIX: was DESC — messages should be in chronological (ASC) order
+      order: [[Message, "createdAt", "ASC"]],
     });
 
     if (!conversation) {
