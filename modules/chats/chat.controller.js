@@ -136,9 +136,12 @@ OUTPUT:
     );
 
     if (!hfResponse.ok) {
-      throw new Error("Error from model API");
-    }
+      const errText = await hfResponse.text();
+      console.error("HF ERROR STATUS:", hfResponse.status);
+      console.error("HF ERROR BODY:", errText);
 
+      throw new Error(errText);
+    }
     const data = await hfResponse.json();
 
     const answer =
