@@ -16,6 +16,6 @@ router.post(
 
 router.get('/', isAuth, getAll)
 
-router.delete('/:documentId', deleteDoc)
+router.delete('/:documentId', isAuth, deleteDoc)
 
 export default router;
