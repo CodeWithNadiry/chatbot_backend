@@ -1,4 +1,4 @@
-import { AppError } from "./AppError";
+import { AppError } from "./AppError.js";
 
 export async function validate(files) {
   if (!files || files.length === 0) {

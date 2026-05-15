@@ -1,4 +1,4 @@
-import { chatService } from "./chat.service.js";
+import { chatService } from "./chats.service.js";
 
 export async function handleQuery(req, res, next) {
   try {

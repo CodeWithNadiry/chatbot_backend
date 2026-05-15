@@ -3,10 +3,10 @@ import { sequelize } from "../../db/client.js";
 import { generateEmbedding } from "../../utils/generateEmbedding.js";
 
 import { validate } from "../../utils/validators.js";
-import { extractText } from "../../lib/fileParser.js";
 import { getFileType } from "../../utils/getFileType.js";
 import { splitText } from "../../lib/textSplitter.js";
 import { AppError } from "../../utils/AppError.js";
+import { extractText } from "../../lib/fileParse.js";
 
 export const documentService = {
   async ingestDocuments(req) {
