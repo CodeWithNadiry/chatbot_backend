@@ -6,7 +6,6 @@ import { configData } from "../../config/config.js";
 
 const { jwtSecretKey, jwtExpiresIn } = configData;
 
-console.log(jwtSecretKey)
 export const authService = {
   async signupUser(data) {
     const { name, email, password } = data;
