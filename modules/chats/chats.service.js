@@ -228,7 +228,7 @@ ${question}
         model: Message,
         attributes: ["role", "content"],
       },
-      order: [[Message, "createdAt", "ASC"]],
+      order: [[Message, "createdAt", "DESC"]],
     });
 
     if (!conversation) {
