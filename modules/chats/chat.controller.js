@@ -42,7 +42,10 @@ export async function handleQuery(req, res, next) {
     });
 
     const chatHistory = previousMessages
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`)
+      .map(
+        (m) =>
+          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
+      )
       .join("\n");
 
     // ── 3. Save the new user message ────────────────────────────────────────
@@ -74,7 +77,7 @@ export async function handleQuery(req, res, next) {
           embedding: `[${embedding.join(",")}]`,
         },
         type: QueryTypes.SELECT,
-      }
+      },
     );
 
     const chunkIds = results.map((r) => r.chunkId);
@@ -118,11 +121,12 @@ STRICT RULES:
 - Do NOT hallucinate or add facts outside the context.
 - Be concise, accurate, and helpful.
 
-FORMATTING RULES (VERY IMPORTANT):
-- Reply in plain text only. NO markdown whatsoever.
-- Do NOT use ** for bold, * for italic, # for headings, or backticks for code.
-- Do NOT use bullet points with -, *, or numbered lists unless absolutely necessary.
-- Write in clear, natural sentences and paragraphs.
+FORMATTING RULES:
+- Use clean markdown formatting.
+- Use headings when useful.
+- Use bullet points for lists.
+- Use fenced code blocks for code.
+- Keep formatting readable and professional.
 `.trim(),
             },
             {
@@ -140,7 +144,7 @@ ${question}
           temperature: 0.4,
           max_tokens: 512,
         }),
-      }
+      },
     );
 
     if (!hfResponse.ok) {
@@ -192,7 +196,7 @@ ${question}
             temperature: 0.2,
             max_tokens: 20, // FIX: was missing — title could be very long
           }),
-        }
+        },
       );
 
       if (hfTitleResponse.ok) {
