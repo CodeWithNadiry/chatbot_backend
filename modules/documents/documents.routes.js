@@ -8,10 +8,10 @@ const router = Router();
 
 router.post(
   "/upload",
+  isAuth,
   upload.array("files"),
   validateRequest(uploadDocumentSchema),
-  isAuth,
-  ingest,
+  ingest
 );
 
 router.get('/', isAuth, getAll)

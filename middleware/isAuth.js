@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 
 export function isAuth(req, res, next) {
-  console.log("isAuth running");
 
   const authHeader = req.get("Authorization");
 
@@ -11,7 +10,6 @@ export function isAuth(req, res, next) {
 
   const token = authHeader.split(" ")[1];
 
-  console.log("TOKEN:", token);
 
   if (!token) {
     return res.status(401).json({ message: "Token missing." });

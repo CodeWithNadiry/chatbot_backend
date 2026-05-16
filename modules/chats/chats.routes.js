@@ -1,15 +1,25 @@
 import { Router } from "express";
-import { get, getAll, handleQuery } from "./chat.controller.js";
+import {
+  chatStream,
+  get,
+  getAll,
+  handleQuery,
+} from "./chat.controller.js";
+
 import { validateRequest } from "../../middleware/validateRequest.js";
 import { chatSchema } from "./chats.schema.js";
 import { isAuth } from "../../middleware/isAuth.js";
 
 const router = Router();
 
+// normal chat
 router.post("/query", isAuth, validateRequest(chatSchema), handleQuery);
 
-router.get('/:id', isAuth, get);
+// streaming chat
+router.post("/stream", isAuth, chatStream);
 
-router.get('/', isAuth, getAll)
+// conversations
+router.get("/:id", isAuth, get);
+router.get("/", isAuth, getAll);
 
 export default router;

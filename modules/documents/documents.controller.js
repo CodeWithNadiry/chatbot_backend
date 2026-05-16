@@ -1,9 +1,8 @@
 import { documentService } from "./documents.service.js";
 
-const { ingestDocuments, getAllDocuments, deleteDocument } = documentService;
 export async function ingest(req, res, next) {
   try {
-    const result = await ingestDocuments(req);
+    const result = await documentService.ingestDocuments(req);
 
     res.status(200).json(result);
   } catch (error) {
@@ -13,7 +12,7 @@ export async function ingest(req, res, next) {
 
 export async function getAll(req, res, next) {
   try {
-    const documents = await getAllDocuments(req.userId);
+    const documents = await documentService.getAllDocuments(req.userId);
 
     res.status(200).json({ documents });
   } catch (error) {
@@ -23,7 +22,7 @@ export async function getAll(req, res, next) {
 
 export async function deleteDoc(req, res, next) {
   try {
-    const result = await deleteDocument(req.params.documentId);
+    const result = await documentService.deleteDocument(req.params.documentId);
 
     res.status(200).json(result);
   } catch (error) {

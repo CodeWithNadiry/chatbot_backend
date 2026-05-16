@@ -17,5 +17,3 @@ export const initModels = () => {
   Document.hasMany(Chunk, { foreignKey: "documentId" });
   Chunk.belongsTo(Document, { foreignKey: "documentId" });
 };
-
-

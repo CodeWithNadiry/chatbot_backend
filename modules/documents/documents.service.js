@@ -2,30 +2,31 @@ import Document from "../../models/document.model.js";
 import { sequelize } from "../../db/client.js";
 import { generateEmbedding } from "../../utils/generateEmbedding.js";
 
-import { validate } from "../../utils/validators.js";
 import { getFileType } from "../../utils/getFileType.js";
 import { splitText } from "../../lib/textSplitter.js";
 import { AppError } from "../../utils/AppError.js";
 import { extractText } from "../../lib/fileParse.js";
+import { validateRequest } from "../../middleware/validateRequest.js";
 
 export const documentService = {
   async ingestDocuments(req) {
     const files = req.files;
     const userId = req.userId;
 
-    validate(files);
+    validateRequest(files);
 
     const results = await Promise.all(
       files.map(async (file) => {
         let document;
 
         try {
-          document = await this.createDocument(file, userId);
+          document = await documentService.createDocument(file, userId);
 
           const text = await extractText(file);
 
           if (!text) {
             await document.update({ status: "failed" });
+
             throw new AppError("No text extracted from file", 400);
           }
 
@@ -34,37 +35,39 @@ export const documentService = {
           const chunks = await splitText(
             text,
             req.body.chunkSize || 1000,
-            req.body.chunkOverlap || 200,
+            req.body.chunkOverlap || 200
           );
 
-          for (let i = 0; i < chunks.length; i++) {
-            const embedding = await generateEmbedding(chunks[i]);
+          // GENERATE ALL EMBEDDINGS IN PARALLEL
+          const embeddings = await Promise.all(
+            chunks.map((chunk) => generateEmbedding(chunk))
+          );
 
-            if (!Array.isArray(embedding)) {
-              throw new Error("Invalid embedding format");
-            }
-
-            await sequelize.query(
-              `
-              INSERT INTO chunks
-              ("userId", "documentId", "chunkIndex", content, embedding, metadata)
-              VALUES ($1, $2, $3, $4, $5::vector, $6)
-              `,
-              {
-                bind: [
-                  userId,
-                  document.documentId,
-                  i,
-                  chunks[i],
-                  `[${embedding.join(",")}]`,
-                  {
-                    chunkSize: req.body.chunkSize,
-                    chunkOverlap: req.body.chunkOverlap,
-                  },
-                ],
-              },
-            );
-          }
+          // INSERT ALL CHUNKS IN PARALLEL
+          await Promise.all(
+            chunks.map((chunk, index) =>
+              sequelize.query(
+                `
+                INSERT INTO chunks
+                ("userId", "documentId", "chunkIndex", content, embedding, metadata)
+                VALUES ($1, $2, $3, $4, $5::vector, $6)
+                `,
+                {
+                  bind: [
+                    userId,
+                    document.documentId,
+                    index,
+                    chunk,
+                    `[${embeddings[index].join(",")}]`,
+                    {
+                      chunkSize: req.body.chunkSize,
+                      chunkOverlap: req.body.chunkOverlap,
+                    },
+                  ],
+                }
+              )
+            )
+          );
 
           await document.update({ status: "completed" });
 
@@ -73,9 +76,10 @@ export const documentService = {
           if (document) {
             await document.update({ status: "failed" });
           }
+
           throw err;
         }
-      }),
+      })
     );
 
     return {
@@ -97,15 +101,10 @@ export const documentService = {
   },
 
   async getAllDocuments(userId) {
-    const docs = await Document.findAll({
+    return await Document.findAll({
       where: { userId },
+      order: [["createdAt", "DESC"]],
     });
-
-    if (!docs.length) {
-      throw new AppError("No documents found", 404);
-    }
-
-    return docs;
   },
 
   async deleteDocument(documentId) {

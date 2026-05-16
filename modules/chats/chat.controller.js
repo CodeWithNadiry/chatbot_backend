@@ -9,6 +9,29 @@ export async function handleQuery(req, res, next) {
   }
 }
 
+// 🔥 STREAM CONTROLLER (CLEAN + WORKING)
+export async function chatStream(req, res, next) {
+  try {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+
+    const { question, conversationId } = req.body;
+    const userId = req.userId;
+
+    await chatService.handleStream({
+      question,
+      conversationId,
+      userId,
+      res,
+    });
+
+    res.end();
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function getAll(req, res, next) {
   try {
     const result = await chatService.getAllConversations(req.userId);
@@ -20,7 +43,10 @@ export async function getAll(req, res, next) {
 
 export async function get(req, res, next) {
   try {
-    const result = await chatService.getConversation(req.userId, req.params.id);
+    const result = await chatService.getConversation(
+      req.userId,
+      req.params.id
+    );
     res.status(200).json(result);
   } catch (error) {
     next(error);
