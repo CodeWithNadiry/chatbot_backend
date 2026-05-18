@@ -1,10 +1,5 @@
 import { Router } from "express";
-import {
-  chatStream,
-  get,
-  getAll,
-  handleQuery,
-} from "./chat.controller.js";
+import { chatStream, get, getAll, handleQuery } from "./chat.controller.js";
 
 import { validateRequest } from "../../middleware/validateRequest.js";
 import { chatSchema } from "./chats.schema.js";

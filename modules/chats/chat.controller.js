@@ -43,10 +43,7 @@ export async function getAll(req, res, next) {
 
 export async function get(req, res, next) {
   try {
-    const result = await chatService.getConversation(
-      req.userId,
-      req.params.id
-    );
+    const result = await chatService.getConversation(req.userId, req.params.id);
     res.status(200).json(result);
   } catch (error) {
     next(error);

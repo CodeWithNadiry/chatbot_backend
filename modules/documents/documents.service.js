@@ -6,81 +6,82 @@ import { getFileType } from "../../utils/getFileType.js";
 import { splitText } from "../../lib/textSplitter.js";
 import { AppError } from "../../utils/AppError.js";
 import { extractText } from "../../lib/fileParse.js";
-import { validateRequest } from "../../middleware/validateRequest.js";
+import { validate } from "../../utils/validators.js";
 
 export const documentService = {
   async ingestDocuments(req) {
     const files = req.files;
     const userId = req.userId;
 
-    validateRequest(files);
+    validate(files);
 
     const results = await Promise.all(
-      files.map(async (file) => {
-        let document;
+  files.map(async (file) => {
+    let document;
 
-        try {
-          document = await documentService.createDocument(file, userId);
+    try {
+      document = await documentService.createDocument(file, userId);
 
-          const text = await extractText(file);
+      const text = await extractText(file);
 
-          if (!text) {
-            await document.update({ status: "failed" });
+      if (!text) {
+        await document.update({ status: "failed" });
+        return document;
+      }
 
-            throw new AppError("No text extracted from file", 400);
-          }
+      await document.update({ status: "processing" });
 
-          await document.update({ status: "processing" });
+      const chunks = await splitText(
+        text,
+        req.body.chunkSize || 1000,
+        req.body.chunkOverlap || 200
+      );
 
-          const chunks = await splitText(
-            text,
-            req.body.chunkSize || 1000,
-            req.body.chunkOverlap || 200
-          );
+      const embeddings = await Promise.all(
+        chunks.map((chunk) => generateEmbedding(chunk))
+      );
 
-          // GENERATE ALL EMBEDDINGS IN PARALLEL
-          const embeddings = await Promise.all(
-            chunks.map((chunk) => generateEmbedding(chunk))
-          );
-
-          // INSERT ALL CHUNKS IN PARALLEL
-          await Promise.all(
-            chunks.map((chunk, index) =>
-              sequelize.query(
-                `
-                INSERT INTO chunks
-                ("userId", "documentId", "chunkIndex", content, embedding, metadata)
-                VALUES ($1, $2, $3, $4, $5::vector, $6)
-                `,
+      await Promise.all(
+        chunks.map((chunk, index) =>
+          sequelize.query(
+            `
+            INSERT INTO chunks
+            ("userId", "documentId", "chunkIndex", content, embedding, metadata)
+            VALUES ($1, $2, $3, $4, $5::vector, $6)
+            `,
+            {
+              bind: [
+                userId,
+                document.documentId,
+                index,
+                chunk,
+                `[${embeddings[index].join(",")}]`,
                 {
-                  bind: [
-                    userId,
-                    document.documentId,
-                    index,
-                    chunk,
-                    `[${embeddings[index].join(",")}]`,
-                    {
-                      chunkSize: req.body.chunkSize,
-                      chunkOverlap: req.body.chunkOverlap,
-                    },
-                  ],
-                }
-              )
-            )
-          );
+                  chunkSize: req.body.chunkSize,
+                  chunkOverlap: req.body.chunkOverlap,
+                },
+              ],
+            }
+          )
+        )
+      );
 
-          await document.update({ status: "completed" });
+      await document.update({ status: "completed" });
 
-          return document;
-        } catch (err) {
-          if (document) {
-            await document.update({ status: "failed" });
-          }
+      return document;
+    } catch (err) {
+      if (document) {
+        await document.update({ status: "failed" });
+        return document;
+      }
 
-          throw err;
-        }
-      })
-    );
+      return {
+        fileName: file.name,
+        status: "failed",
+      };
+    }
+  })
+);
 
     return {
       message: `document${files.length > 1 ? "s" : ""} uploaded successfully`,
