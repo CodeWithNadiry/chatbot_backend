@@ -21,7 +21,7 @@ export const documentService = {
 
     try {
       document = await documentService.createDocument(file, userId);
-
+      
       const text = await extractText(file);
 
       if (!text) {

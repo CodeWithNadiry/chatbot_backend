@@ -430,7 +430,7 @@ ${question}
     let fullText = "";
 
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await reader.read(); // "Wait for next chunk"
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
