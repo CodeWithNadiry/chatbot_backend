@@ -29,3 +29,11 @@ export async function deleteDoc(req, res, next) {
     next(error);
   }
 }
+
+
+// if (!orderedChunks.length) {
+//       answer =
+//         "I do not have enough information in the uploaded documents to answer that question.";
+//     } else {
+//       answer = await this.callLLM(question, context, chatHistory);
+//     }

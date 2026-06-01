@@ -40,12 +40,20 @@ export const authService = {
 
     if (!user) {
       throw new UnauthorizedError("Invalid credentials");
+      //       UnauthorizedError {
+      //   message: "Invalid credentials",
+      //   statusCode: 401
+      // }
     }
 
     const isEqual = await bcrypt.compare(password, user.password);
 
     if (!isEqual) {
       throw new UnauthorizedError("Invalid credentials");
+      // throw {
+      //   message: "Invalid credentials",
+      //   statusCode: 401,
+      // };
     }
 
     const token = jwt.sign(

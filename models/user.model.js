@@ -13,6 +13,7 @@ const User = sequelize.define("user", {
   email: { type: DataTypes.STRING, unique: true, allowNull: false }, // unique puts error: Validation error
 
   password: { type: DataTypes.STRING, allowNull: false },
+
 });
 
 export default User;

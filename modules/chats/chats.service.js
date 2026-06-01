@@ -65,11 +65,14 @@ export const chatService = {
 
     const results = await sequelize.query(
       `
-      SELECT "chunkId", content
-      FROM chunks
-      WHERE "userId" = :userId
-      ORDER BY embedding <=> :embedding::vector
-      LIMIT 8
+      SELECT
+  "chunkId",
+  content,
+  1 - (embedding <=> :embedding::vector) AS similarity
+FROM chunks
+WHERE "userId" = :userId
+ORDER BY embedding <=> :embedding::vector
+LIMIT 8
       `,
       {
         replacements: {
@@ -80,7 +83,9 @@ export const chatService = {
       },
     );
 
-    const chunkIds = results.map((r) => r.chunkId);
+    const relevantResults = results.filter((r) => r.similarity >= 0.7);
+
+    const chunkIds = relevantResults.map((r) => r.chunkId);
 
     const chunks = chunkIds.length
       ? await Chunk.findAll({
@@ -93,10 +98,11 @@ export const chatService = {
       .filter(Boolean);
 
     const context = orderedChunks.length
-      ? orderedChunks.map((c) => c.content.trim()).join("\n\n---\n\n")
-      : "No relevant document context found.";
+      ? orderedChunks.map((c) => c.content).join("\n\n---\n\n")
+      : "";
 
-    const answer = await this.callLLM(question, context, chatHistory);
+
+     const answer = await this.callLLM(question, context, chatHistory);
 
     await Message.create({
       conversationId,
@@ -189,7 +195,9 @@ export const chatService = {
       },
     );
 
-    const chunkIds = results.map((r) => r.chunkId);
+    const relevantResults = results.filter((r) => r.similarity >= 0.7);
+
+    const chunkIds = relevantResults.map((r) => r.chunkId);
 
     const chunks = chunkIds.length
       ? await Chunk.findAll({
@@ -202,8 +210,8 @@ export const chatService = {
       .filter(Boolean);
 
     const context = orderedChunks.length
-      ? orderedChunks.map((c) => c.content.trim()).join("\n\n---\n\n")
-      : "No relevant document context found.";
+      ? orderedChunks.map((c) => c.content).join("\n\n---\n\n")
+      : "";
 
     let fullAnswer = "";
 
@@ -230,6 +238,7 @@ export const chatService = {
       }
     }
 
+    res.end();
     return fullAnswer;
   },
 
@@ -252,7 +261,7 @@ export const chatService = {
               role: "system",
               content: `
 ⚠️ CITATION RULE — NON-NEGOTIABLE:
-Every single factual sentence MUST end with [chk_XXX].
+Append chunk IDs immediately after every factual claim.
 No citation = do not include the claim.
 Never use preambles like "Based on the documents..." or "As an AI...".
 Jump straight to the answer.
@@ -395,9 +404,32 @@ ${question}
             {
               role: "system",
               content: `
-You are a grounded RAG-based AI assistant.
-Use only provided context.
-              `.trim(),
+You are a grounded RAG assistant.
+
+Rules:
+
+1. Use ONLY provided context.
+
+2. If answer is not found in context,
+respond exactly:
+
+"I do not have enough information in the uploaded documents to answer that question."
+
+3. Never use outside knowledge.
+
+4. Always format responses using Markdown.
+
+5. Use:
+   - ## Headings
+   - Bullet lists
+   - Numbered lists when needed
+
+6. Leave blank lines between sections.
+
+7. Do not hallucinate.
+
+8. Keep answers concise.
+`.trim(),
             },
             {
               role: "user",

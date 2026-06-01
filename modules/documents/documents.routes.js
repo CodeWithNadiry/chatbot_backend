@@ -9,7 +9,7 @@ const router = Router();
 router.post(
   "/upload",
   isAuth,
-  upload.array("files"),
+  upload.array("files"), // this upload gives us 'req.files' in controller function
   validateRequest(uploadDocumentSchema),
   ingest
 );

@@ -1,6 +1,6 @@
 export async function up(queryInterface) {
   await queryInterface.sequelize.query(
-    "CREATE EXTENSION IF NOT EXISTS vector;"
+    "CREATE EXTENSION IF NOT EXISTS vector;",
   );
 
   await queryInterface.sequelize.query(`

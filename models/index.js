@@ -3,6 +3,7 @@ import Conversation from "./conversation.model.js";
 import Message from "./message.model.js";
 import Document from "./document.model.js";
 import Chunk from "./chunk.model.js";
+import Integration from "./integration.model.js";
 
 export const initModels = () => {
   User.hasMany(Conversation, { foreignKey: "userId" });
@@ -16,4 +17,7 @@ export const initModels = () => {
 
   Document.hasMany(Chunk, { foreignKey: "documentId" });
   Chunk.belongsTo(Document, { foreignKey: "documentId" });
+
+  User.hasMany(Integration, {foreignKey: 'userId'});
+  Integration.belongsTo(User, {foreignKey: 'userId'})
 };

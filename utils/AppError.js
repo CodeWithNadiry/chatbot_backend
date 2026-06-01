@@ -1,6 +1,6 @@
 export class AppError extends Error {
   constructor(message, statusCode) {
-    super(message);
+    super(message); // calls of the Error Class =====>>> this.message = "Invalid credentials";
     this.statusCode = statusCode;
   }
 }
@@ -28,3 +28,8 @@ export class UnauthorizedError extends AppError {
     super(message, 401);
   }
 }
+// super ====>> calls the parent's constructor function
+// constructor ==========>>> is a special method that runs automatically when you create an object with new. Its job is to initialize the object.
+
+// So the purpose of a constructor is:
+// To set up an object with the data it needs when it is created. In your error classes, constructors initialize the message and statusCode for each error instance.

@@ -9,7 +9,6 @@ export async function handleQuery(req, res, next) {
   }
 }
 
-// 🔥 STREAM CONTROLLER (CLEAN + WORKING)
 export async function chatStream(req, res, next) {
   try {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -26,7 +25,7 @@ export async function chatStream(req, res, next) {
       res,
     });
 
-    res.end();
+    // DO NOT call res.end() here — handleStream does it after title is saved
   } catch (error) {
     next(error);
   }
@@ -43,7 +42,10 @@ export async function getAll(req, res, next) {
 
 export async function get(req, res, next) {
   try {
-    const result = await chatService.getConversation(req.userId, req.params.id);
+    const result = await chatService.getConversation(
+      req.userId,
+      req.params.id,
+    );
     res.status(200).json(result);
   } catch (error) {
     next(error);

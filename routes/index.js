@@ -2,7 +2,8 @@ import { Router } from "express";
 import authRoutes from "../modules/auth/auth.routes.js";
 import documentRoutes from '../modules/documents/documents.routes.js'
 import chatRoutes from '../modules/chats/chats.routes.js'
-const router = Router();
+const 
+router = Router();
 
 router.use("/auth", authRoutes);
 
