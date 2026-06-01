@@ -1,5 +1,5 @@
 import { DataTypes } from "sequelize";
-import { sequelize } from "../db/client";
+import { sequelize } from "../db/client.js";
 
 const Tool = sequelize.define("tool", {
   toolId: {
