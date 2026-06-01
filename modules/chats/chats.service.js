@@ -66,13 +66,13 @@ export const chatService = {
     const results = await sequelize.query(
       `
       SELECT
-  "chunkId",
-  content,
-  1 - (embedding <=> :embedding::vector) AS similarity
-FROM chunks
-WHERE "userId" = :userId
-ORDER BY embedding <=> :embedding::vector
-LIMIT 8
+        "chunkId",
+        content,
+        1 - (embedding <=> :embedding::vector) AS similarity
+      FROM chunks
+      WHERE "userId" = :userId
+      ORDER BY embedding <=> :embedding::vector
+      LIMIT 8
       `,
       {
         replacements: {
@@ -83,26 +83,16 @@ LIMIT 8
       },
     );
 
-    const relevantResults = results.filter((r) => r.similarity >= 0.7);
+    // FIX: Lower threshold slightly and ensure we always have some context
+    // if no results pass the threshold
+    const relevantResults = results.filter((r) => r.similarity >= 0.5);
+    const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
-    const chunkIds = relevantResults.map((r) => r.chunkId);
-
-    const chunks = chunkIds.length
-      ? await Chunk.findAll({
-          where: { chunkId: chunkIds, userId },
-        })
-      : [];
-
-    const orderedChunks = results
-      .map((r) => chunks.find((c) => c.chunkId === r.chunkId))
-      .filter(Boolean);
-
-    const context = orderedChunks.length
-      ? orderedChunks.map((c) => c.content).join("\n\n---\n\n")
+    const context = finalResults.length
+      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
 
-
-     const answer = await this.callLLM(question, context, chatHistory);
+    const answer = await this.callLLM(question, context, chatHistory);
 
     await Message.create({
       conversationId,
@@ -178,9 +168,13 @@ LIMIT 8
     // Embedding
     const embedding = await generateEmbedding(question);
 
+    // FIX: Select similarity column (was missing — caused r.similarity to always be undefined)
     const results = await sequelize.query(
       `
-      SELECT "chunkId", content
+      SELECT
+        "chunkId",
+        content,
+        1 - (embedding <=> :embedding::vector) AS similarity
       FROM chunks
       WHERE "userId" = :userId
       ORDER BY embedding <=> :embedding::vector
@@ -195,22 +189,13 @@ LIMIT 8
       },
     );
 
-    const relevantResults = results.filter((r) => r.similarity >= 0.7);
+    // FIX: Use results directly (they already contain content), no need to re-fetch chunks.
+    // Also lowered threshold and added fallback so context is never empty.
+    const relevantResults = results.filter((r) => r.similarity >= 0.5);
+    const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
-    const chunkIds = relevantResults.map((r) => r.chunkId);
-
-    const chunks = chunkIds.length
-      ? await Chunk.findAll({
-          where: { chunkId: chunkIds, userId },
-        })
-      : [];
-
-    const orderedChunks = results
-      .map((r) => chunks.find((c) => c.chunkId === r.chunkId))
-      .filter(Boolean);
-
-    const context = orderedChunks.length
-      ? orderedChunks.map((c) => c.content).join("\n\n---\n\n")
+    const context = finalResults.length
+      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
 
     let fullAnswer = "";
@@ -462,7 +447,7 @@ ${question}
     let fullText = "";
 
     while (true) {
-      const { value, done } = await reader.read(); // "Wait for next chunk"
+      const { value, done } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
