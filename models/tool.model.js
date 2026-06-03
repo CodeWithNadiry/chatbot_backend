@@ -14,7 +14,7 @@ const Tool = sequelize.define("tool", {
     
   description: DataTypes.TEXT,
 
-  parameters: DataTypes.JSON,
+  parameters: DataTypes.JSON, // LLM uses this to know what arguments to extract
 
   enabled: DataTypes.BOOLEAN,
 });

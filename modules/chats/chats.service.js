@@ -5,227 +5,261 @@ import Chunk from "../../models/chunk.model.js";
 import { sequelize } from "../../db/client.js";
 import { QueryTypes } from "sequelize";
 import { AppError } from "../../utils/AppError.js";
+import Groq from "groq-sdk";
+import { detectToolUse } from "../../utils/toolDetector.js";
+import { sendEmail } from "../../utils/gmailSender.js";
+import { getLLMFinalAnswer } from "../../utils/llmAnswer.js";
 
 export const chatService = {
   // =========================
   // NORMAL CHAT (NON-STREAM)
   // =========================
   async handleQuery(req) {
-    const { question, conversationId: incomingConversationId } = req.body;
-    const userId = req.userId;
+  const { question, conversationId: incomingConversationId } = req.body;
+  const userId = req.userId;
+
+  // Tool detection
+  const toolResult = await detectToolUse(question);
+
+  if (toolResult) {
+    const { toolName, toolArgs } = toolResult;
+
+    let toolOutput = "";
+
+    if (toolName === "send_email") {
+      toolOutput = await sendEmail(userId, toolArgs);
+    }
+
+    const reply = await getLLMFinalAnswer(question, toolName, toolOutput);
 
     let conversation;
-    let isNewConversation = false;
     let conversationId = incomingConversationId;
 
     if (!conversationId) {
-      isNewConversation = true;
-
-      conversation = await Conversation.create({
-        userId,
-        title: "",
-      });
-
+      conversation = await Conversation.create({ userId, title: "" });
       conversationId = conversation.conversationId;
     } else {
-      conversation = await Conversation.findOne({
-        where: { conversationId, userId },
-      });
-
-      if (!conversation) {
-        throw new AppError("Conversation not found", 404);
-      }
+      conversation = await Conversation.findOne({ where: { conversationId, userId } });
     }
 
-    const previousMessages = await Message.findAll({
-      where: { conversationId },
-      order: [["createdAt", "DESC"]],
-      limit: 10,
+    await Message.create({ conversationId, role: "user", content: question });
+    await Message.create({ conversationId, role: "assistant", model: "groq", content: reply });
+
+    const title = await chatService.generateTitle(question, reply);
+    if (title) await conversation.update({ title });
+
+    return { answer: reply, conversationId, title };
+  }
+
+  // Normal RAG flow
+  let conversation;
+  let isNewConversation = false;
+  let conversationId = incomingConversationId;
+
+  if (!conversationId) {
+    isNewConversation = true;
+    conversation = await Conversation.create({ userId, title: "" });
+    conversationId = conversation.conversationId;
+  } else {
+    conversation = await Conversation.findOne({
+      where: { conversationId, userId },
     });
 
-    const chatHistory = previousMessages
-      .map(
-        (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
-      )
-      .join("\n");
-
-    await Message.create({
-      conversationId,
-      role: "user",
-      model: null,
-      content: question,
-    });
-
-    const embedding = await generateEmbedding(question);
-
-    if (!Array.isArray(embedding) || embedding.length === 0) {
-      throw new AppError("Invalid embedding format", 500);
+    if (!conversation) {
+      throw new AppError("Conversation not found", 404);
     }
+  }
 
-    const results = await sequelize.query(
-      `
-      SELECT
-        "chunkId",
-        content,
-        1 - (embedding <=> :embedding::vector) AS similarity
-      FROM chunks
-      WHERE "userId" = :userId
-      ORDER BY embedding <=> :embedding::vector
-      LIMIT 8
-      `,
-      {
-        replacements: {
-          userId,
-          embedding: `[${embedding.join(",")}]`,
-        },
-        type: QueryTypes.SELECT,
+  const previousMessages = await Message.findAll({
+    where: { conversationId },
+    order: [["createdAt", "DESC"]],
+    limit: 10,
+  });
+
+  const chatHistory = previousMessages
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`)
+    .join("\n");
+
+  await Message.create({
+    conversationId,
+    role: "user",
+    model: null,
+    content: question,
+  });
+
+  const embedding = await generateEmbedding(question);
+
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new AppError("Invalid embedding format", 500);
+  }
+
+  const results = await sequelize.query(
+    `
+    SELECT
+      "chunkId",
+      content,
+      1 - (embedding <=> :embedding::vector) AS similarity
+    FROM chunks
+    WHERE "userId" = :userId
+    ORDER BY embedding <=> :embedding::vector
+    LIMIT 8
+    `,
+    {
+      replacements: {
+        userId,
+        embedding: `[${embedding.join(",")}]`,
       },
-    );
+      type: QueryTypes.SELECT,
+    },
+  );
 
-    // FIX: Lower threshold slightly and ensure we always have some context
-    // if no results pass the threshold
-    const relevantResults = results.filter((r) => r.similarity >= 0.5);
-    const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
+  const relevantResults = results.filter((r) => r.similarity >= 0.5);
+  const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
-    const context = finalResults.length
-      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
-      : "";
+  const context = finalResults.length
+    ? finalResults.map((r) => r.content).join("\n\n---\n\n")
+    : "";
 
-    const answer = await this.callLLM(question, context, chatHistory);
+  const answer = await this.callLLM(question, context, chatHistory);
 
-    await Message.create({
-      conversationId,
-      role: "assistant",
-      model: "Qwen/Qwen2.5-7B-Instruct",
-      content: answer,
-    });
+  await Message.create({
+    conversationId,
+    role: "assistant",
+    model: "Qwen/Qwen2.5-7B-Instruct",
+    content: answer,
+  });
 
-    let title = conversation.title;
+  let title = conversation.title;
 
-    if (isNewConversation) {
-      title = await this.generateTitle(question, answer);
+  if (isNewConversation) {
+    title = await this.generateTitle(question, answer);
+    if (title) await conversation.update({ title });
+  }
 
-      if (title) {
-        await conversation.update({ title });
-      }
-    }
-
-    return {
-      answer,
-      conversationId,
-      title,
-    };
-  },
-
+  return { answer, conversationId, title };
+},
   // =========================
   // STREAMING CHAT (MAIN FEATURE)
   // =========================
   async handleStream({ question, conversationId, userId, res }) {
+
+  // Tool detection
+  const toolResult = await detectToolUse(question);
+  if (toolResult) {
+    const { toolName, toolArgs } = toolResult;
+
+    let toolOutput = "";
+
+    if (toolName === "send_email") {
+      toolOutput = await sendEmail(userId, toolArgs);
+    }
+
+    const reply = await getLLMFinalAnswer(question, toolName, toolOutput);
+
     let conversation;
-    let isNew = false;
-
     if (!conversationId) {
-      isNew = true;
-
-      conversation = await Conversation.create({
-        userId,
-        title: "",
-      });
-
+      conversation = await Conversation.create({ userId, title: "" });
       conversationId = conversation.conversationId;
     } else {
-      conversation = await Conversation.findOne({
-        where: { conversationId, userId },
-      });
-
-      if (!conversation) {
-        throw new AppError("Conversation not found", 404);
-      }
+      conversation = await Conversation.findOne({ where: { conversationId, userId } });
     }
 
-    // Save user message
-    await Message.create({
-      conversationId,
-      role: "user",
-      content: question,
-    });
+    await Message.create({ conversationId, role: "user", content: question });
+    await Message.create({ conversationId, role: "assistant", model: "groq", content: reply });
 
-    // Chat history
-    const previousMessages = await Message.findAll({
-      where: { conversationId },
-      order: [["createdAt", "DESC"]],
-      limit: 10,
-    });
+    const title = await chatService.generateTitle(question, reply);
+    if (title) await conversation.update({ title });
 
-    const chatHistory = previousMessages
-      .map(
-        (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
-      )
-      .join("\n");
-
-    // Embedding
-    const embedding = await generateEmbedding(question);
-
-    // FIX: Select similarity column (was missing — caused r.similarity to always be undefined)
-    const results = await sequelize.query(
-      `
-      SELECT
-        "chunkId",
-        content,
-        1 - (embedding <=> :embedding::vector) AS similarity
-      FROM chunks
-      WHERE "userId" = :userId
-      ORDER BY embedding <=> :embedding::vector
-      LIMIT 8
-      `,
-      {
-        replacements: {
-          userId,
-          embedding: `[${embedding.join(",")}]`,
-        },
-        type: QueryTypes.SELECT,
-      },
-    );
-
-    // FIX: Use results directly (they already contain content), no need to re-fetch chunks.
-    // Also lowered threshold and added fallback so context is never empty.
-    const relevantResults = results.filter((r) => r.similarity >= 0.5);
-    const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
-
-    const context = finalResults.length
-      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
-      : "";
-
-    let fullAnswer = "";
-
-    // STREAM START
-    await this.callLLMStream(question, context, chatHistory, (token) => {
-      fullAnswer += token;
-      res.write(token);
-    });
-
-    // Save assistant message after streaming
-    await Message.create({
-      conversationId,
-      role: "assistant",
-      model: "Qwen/Qwen2.5-7B-Instruct",
-      content: fullAnswer,
-    });
-
-    // Title generation for new chat
-    if (isNew) {
-      const title = await this.generateTitle(question, fullAnswer);
-
-      if (title) {
-        await conversation.update({ title });
-      }
-    }
-
+    res.write(reply);
     res.end();
-    return fullAnswer;
-  },
+    return;
+  }
+
+  // Normal RAG flow
+  let conversation;
+  let isNew = false;
+
+  if (!conversationId) {
+    isNew = true;
+    conversation = await Conversation.create({ userId, title: "" });
+    conversationId = conversation.conversationId;
+  } else {
+    conversation = await Conversation.findOne({
+      where: { conversationId, userId },
+    });
+
+    if (!conversation) {
+      throw new AppError("Conversation not found", 404);
+    }
+  }
+
+  await Message.create({
+    conversationId,
+    role: "user",
+    content: question,
+  });
+
+  const previousMessages = await Message.findAll({
+    where: { conversationId },
+    order: [["createdAt", "DESC"]],
+    limit: 10,
+  });
+
+  const chatHistory = previousMessages
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`)
+    .join("\n");
+
+  const embedding = await generateEmbedding(question);
+
+  const results = await sequelize.query(
+    `
+    SELECT
+      "chunkId",
+      content,
+      1 - (embedding <=> :embedding::vector) AS similarity
+    FROM chunks
+    WHERE "userId" = :userId
+    ORDER BY embedding <=> :embedding::vector
+    LIMIT 8
+    `,
+    {
+      replacements: {
+        userId,
+        embedding: `[${embedding.join(",")}]`,
+      },
+      type: QueryTypes.SELECT,
+    },
+  );
+
+  const relevantResults = results.filter((r) => r.similarity >= 0.5);
+  const finalResults = relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
+
+  const context = finalResults.length
+    ? finalResults.map((r) => r.content).join("\n\n---\n\n")
+    : "";
+
+  let fullAnswer = "";
+
+  await this.callLLMStream(question, context, chatHistory, (token) => {
+    fullAnswer += token;
+    res.write(token);
+  });
+
+  await Message.create({
+    conversationId,
+    role: "assistant",
+    model: "Qwen/Qwen2.5-7B-Instruct",
+    content: fullAnswer,
+  });
+
+  if (isNew) {
+    const title = await this.generateTitle(question, fullAnswer);
+    if (title) await conversation.update({ title });
+  }
+
+  res.end();
+  return fullAnswer;
+},
 
   // =========================
   // NORMAL LLM CALL

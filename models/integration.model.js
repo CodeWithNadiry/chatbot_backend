@@ -2,11 +2,10 @@ import { DataTypes } from "sequelize";
 import { sequelize } from "../db/client.js";
 
 const Integration = sequelize.define("integration", {
-
   integrationId: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
-    primaryKey: true
+    primaryKey: true,
   },
 
   userId: {
@@ -14,36 +13,38 @@ const Integration = sequelize.define("integration", {
     allowNull: false,
     references: {
       model: "users",
-      key: "userId"
+      key: "userId",
     },
-    onDelete: 'CASCADE'
+    onDelete: "CASCADE",
   },
 
   provider: {
     type: DataTypes.STRING,
-    allowNull: false
+    allowNull: false,
   },
 
   accessToken: {
-    type: DataTypes.TEXT
+    type: DataTypes.TEXT,
   },
 
   refreshToken: {
-    type: DataTypes.TEXT
+    type: DataTypes.TEXT,
   },
 
   connected: {
     type: DataTypes.BOOLEAN,
-    defaultValue: false
+    defaultValue: false,
   },
 
   metadata: {
-    type: DataTypes.JSON
+    type: DataTypes.JSON,
   },
 
   expiresAt: {
-    type: DataTypes.DATE
-  }
+    type: DataTypes.DATE,
+  },
 });
 
 export default Integration;
+
+// The Integration model answers: "when the LLM says 'call send_email', do we actually have a valid Gmail connection for this user, and what token do we use?"
