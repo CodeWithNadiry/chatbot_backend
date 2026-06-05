@@ -1,8 +1,10 @@
 import { chatService } from "./chats.service.js";
+import { getLLMFinalAnswer } from "../../utils/llmAnswer.js";
 
 export async function handleQuery(req, res, next) {
   try {
     const result = await chatService.handleQuery(req);
+    console.log(result);
     res.status(200).json(result);
   } catch (error) {
     next(error);
@@ -31,6 +33,20 @@ export async function chatStream(req, res, next) {
   }
 }
 
+export async function sendFinalEmail(req, res, next) {
+  try {
+    const { to, subject, message, question, toolName, conversationId } = req.body;
+     
+    const result = await chatService.handleEmail(
+      req.userId, to, subject, message, question, toolName, conversationId
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+
 export async function getAll(req, res, next) {
   try {
     const result = await chatService.getAllConversations(req.userId);
@@ -42,10 +58,7 @@ export async function getAll(req, res, next) {
 
 export async function get(req, res, next) {
   try {
-    const result = await chatService.getConversation(
-      req.userId,
-      req.params.id,
-    );
+    const result = await chatService.getConversation(req.userId, req.params.id);
     res.status(200).json(result);
   } catch (error) {
     next(error);

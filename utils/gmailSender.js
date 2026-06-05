@@ -20,15 +20,12 @@ export async function sendEmail(userId, { to, subject, message }) {
     );
   }
 
-  console.log("accessToken:", integration.accessToken);
-  console.log("refreshToken:", integration.refreshToken);
-
   const oauth2Client = getOAuthClient();
 
   oauth2Client.setCredentials({
-  access_token: integration.accessToken,
-  refresh_token: integration.refreshToken,
-});
+    access_token: integration.accessToken,
+    refresh_token: integration.refreshToken,
+  });
 
   oauth2Client.on("tokens", async (tokens) => {
     if (tokens.access_token) {
@@ -39,7 +36,7 @@ export async function sendEmail(userId, { to, subject, message }) {
     }
   });
 
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client }); // This tells the Google library: "Create a Gmail API object and use this authenticated user when making requests.
 
   const rawEmail = [
     `To: ${to}`,
@@ -56,10 +53,12 @@ export async function sendEmail(userId, { to, subject, message }) {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
+  // const encodedEmail = Buffer.from(rawEmail).toString("base64url");x
   await gmail.users.messages.send({
     userId: "me",
     requestBody: { raw: encodedEmail },
   });
 
-  return "Email sent successfully.";
+  // Return the actual content that was sent
+  return { to, subject, message };
 }

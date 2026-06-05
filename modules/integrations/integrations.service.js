@@ -10,7 +10,7 @@ const getOAuthClient = () => {
 };
 
 export const integrationService = {
-  // this function returns a long secure URL string hosted by Google.
+  // this function returns a long secure URL string hosted by Google to frontend.
   getAuthUrl(userId) {
     if (!userId) {
       throw new Error("userId is required to generate auth URL");
@@ -37,8 +37,8 @@ export const integrationService = {
     await Integration.upsert({
       userId,
       provider: "google",
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
+      accessToken: tokens.access_token, // used to call Gmail API
+      refreshToken: tokens.refresh_token, // used to get new access token when expired
       connected: true,
       expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
       metadata: { scope: tokens.scope },
