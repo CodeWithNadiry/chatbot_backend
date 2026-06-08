@@ -2,6 +2,7 @@ import { generateEmbedding } from "../../utils/generateEmbedding.js";
 import Conversation from "../../models/conversation.model.js";
 import Message from "../../models/message.model.js";
 import Chunk from "../../models/chunk.model.js";
+import Document from "../../models/document.model.js";
 import { sequelize } from "../../db/client.js";
 import { QueryTypes } from "sequelize";
 import { AppError } from "../../utils/AppError.js";
@@ -13,6 +14,64 @@ import { sendEmail } from "../../utils/gmailSender.js";
 const NO_CONTEXT_REPLY =
   "I do not have enough information in the uploaded documents to answer that question.";
 
+// =========================
+// SYSTEM QUESTION DETECTOR
+// =========================
+const SYSTEM_QUESTIONS = [
+  "who are you",
+  "what can you do for me",
+  "what can you do",
+  "what topics can you help me with",
+  "what topics can you help with",
+  "what can you help me with",
+];
+
+function isSystemQuestion(question) {
+  const normalized = question.toLowerCase().trim().replace(/[?!.]+$/, "");
+  return SYSTEM_QUESTIONS.some((q) => normalized.includes(q));
+}
+
+async function getSystemAnswer(question, userId) {
+  const normalized = question.toLowerCase().trim().replace(/[?!.]+$/, "");
+
+  if (normalized.includes("who are you")) {
+    return `I am your personal AI assistant powered by a Retrieval-Augmented Generation (RAG) system. I can read and understand documents you upload and answer questions based on their content. I also have Gmail integration, so I can help you draft and send emails directly from the chat.`;
+  }
+
+  if (
+    normalized.includes("what can you do") ||
+    normalized.includes("what can you help me with")
+  ) {
+    return `Here is what I can do for you:\n\n- **Answer questions** based on the documents you have uploaded\n- **Search across multiple documents** and find relevant information\n- **Maintain conversation history** so you can ask follow-up questions\n- **Send emails** via Gmail — just tell me who to email, the subject, and the message\n- **Summarize, explain, and compare** content from your uploaded files`;
+  }
+
+  if (normalized.includes("what topics can you help")) {
+    let docList = "";
+    try {
+      const docs = await Document.findAll({
+        where: { userId },
+        attributes: ["fileName"],
+        order: [["createdAt", "DESC"]],
+      });
+
+      if (docs.length > 0) {
+        docList =
+          "\n\nHere are the documents you have uploaded:\n" +
+          docs.map((d, i) => `${i + 1}. ${d.fileName}`).join("\n");
+      } else {
+        docList =
+          "\n\nYou have not uploaded any documents yet. Go to the **Documents** section to upload your files.";
+      }
+    } catch (e) {
+      docList = "\n\nCould not retrieve your document list at this time.";
+    }
+
+    return `I can help you with any topics covered in your uploaded documents.${docList}\n\nJust ask me anything about them and I will find the answer for you.`;
+  }
+
+  return null;
+}
+
 export const chatService = {
   // =========================
   // NORMAL CHAT (NON-STREAM)
@@ -20,6 +79,37 @@ export const chatService = {
   async handleQuery(req) {
     const { question, conversationId: incomingConversationId } = req.body;
     const userId = req.userId;
+
+    // ✅ System question intercept (before RAG and tool detection)
+    if (isSystemQuestion(question)) {
+      const systemAnswer = await getSystemAnswer(question, userId);
+      if (systemAnswer) {
+        let conversation;
+        let conversationId = incomingConversationId;
+
+        if (!conversationId) {
+          conversation = await Conversation.create({ userId, title: "" });
+          conversationId = conversation.conversationId;
+        } else {
+          conversation = await Conversation.findOne({
+            where: { conversationId, userId },
+          });
+        }
+
+        await Message.create({ conversationId, role: "user", model: null, content: question });
+        await Message.create({
+          conversationId,
+          role: "assistant",
+          model: null,
+          content: systemAnswer,
+        });
+
+        const title = await this.generateTitle(question, systemAnswer);
+        if (title) await conversation.update({ title });
+
+        return { answer: systemAnswer, conversationId, title };
+      }
+    }
 
     // Tool detection
     const toolResult = await detectToolUse(question);
@@ -111,7 +201,6 @@ export const chatService = {
     const finalResults =
       relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
-    // ✅ Guard: only block if ALL top results are extremely irrelevant
     const bestSimilarity = results[0]?.similarity ?? 0;
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
@@ -157,6 +246,39 @@ export const chatService = {
   // STREAMING CHAT (MAIN FEATURE)
   // =========================
   async handleStream({ question, conversationId, userId, res }) {
+
+    // ✅ System question intercept (before RAG and tool detection)
+    if (isSystemQuestion(question)) {
+      const systemAnswer = await getSystemAnswer(question, userId);
+      if (systemAnswer) {
+        let conversation;
+
+        if (!conversationId) {
+          conversation = await Conversation.create({ userId, title: "" });
+          conversationId = conversation.conversationId;
+        } else {
+          conversation = await Conversation.findOne({
+            where: { conversationId, userId },
+          });
+        }
+
+        await Message.create({ conversationId, role: "user", content: question });
+        await Message.create({
+          conversationId,
+          role: "assistant",
+          model: null,
+          content: systemAnswer,
+        });
+
+        const title = await chatService.generateTitle(question, systemAnswer);
+        if (title) await conversation.update({ title });
+
+        res.write(systemAnswer);
+        res.end();
+        return;
+      }
+    }
+
     // Tool detection
     const toolResult = await detectToolUse(question);
     if (toolResult) {
@@ -242,7 +364,6 @@ export const chatService = {
     const finalResults =
       relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
-    // ✅ Guard: only block if ALL top results are extremely irrelevant
     const bestSimilarity = results[0]?.similarity ?? 0;
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
@@ -364,23 +485,6 @@ You are a grounded information assistant for a RAG-based chatbot. Your sole know
 
 ---
 
-## INPUT FORMAT
-
-Each user turn contains retrieved chunks in this structure:
-
-<<retrieved_chunks>
-<<chunk id="chk_001" source="filename.pdf" score="0.94">
-[Snippet of text from the knowledge base...]
-</chunk>
-<<chunk id="chk_002" source="filename.pdf" score="0.81">
-[Another snippet...]
-</chunk>
-</retrieved_chunks>
-
-User: [question]
-
----
-
 ## CORE BEHAVIOR
 
 1. **Grounded Claims Only**
@@ -392,25 +496,17 @@ User: [question]
 3. **Mandatory Inline Citations**
    Append chunk IDs immediately after every factual claim. Use [chk_001] or [chk_001, chk_003]. Cite once per idea or sentence, not per word.
 
-3. **Synthesize, Don't Copy**
+4. **Synthesize, Don't Copy**
    Paraphrase in your own words. Do not paste large verbatim passages unless the user explicitly requests a direct quote.
 
-4. **Explicit Gaps**
+5. **Explicit Gaps**
    If chunks partially answer, provide what you found, then state clearly: "The chunks do not mention [specific missing detail]."
 
-5. **Conflicting Information**
+6. **Conflicting Information**
    If chunks disagree, present both views with their respective citations. Do not reconcile unless the chunks themselves explain how.
 
-6. **Scope Control**
+7. **Scope Control**
    Answer the question directly. No historical background, general advice, or unsolicited next steps unless explicitly supported by the chunks.
-
----
-
-## EDGE CASES
-
-- **Outdated Information**: If chunks contain dates and may be stale, note it — e.g., "According to the 2023 guidance [chk_005], this may have changed in later versions."
-- **Undefined References**: If a chunk mentions "the standard procedure" without defining it, do not invent details. State that the reference is undefined in the retrieved text.
-- **Technical Terms**: Define acronyms on first use only if the chunk itself provides the definition.
 
 ---
 
@@ -421,18 +517,6 @@ User: [question]
 - Do NOT add advice, opinions, or inferences not grounded in chunk content.
 - Do NOT use preambles like "Based on the documents..." or "As an AI...". Jump straight to the answer.
 - Do NOT produce any sentence without a [chk_XXX] citation attached.
-
----
-
-## PRE-OUTPUT VERIFICATION
-
-Before every response, silently verify:
-- [ ] Every factual claim has an inline citation.
-- [ ] No unsupported claims remain (remove or mark [UNCERTAIN]).
-- [ ] No hallucination or inference beyond the provided chunk content.
-- [ ] The response is concise and directly answers the user.
-- [ ] No preamble phrases were used.
-- [ ] Citation rule at the top was followed without exception.
 
 ---
 
