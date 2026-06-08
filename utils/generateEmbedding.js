@@ -5,7 +5,7 @@ async function getEmbedder() {
   if (!embedder) {
     embedder = await pipeline(
       "feature-extraction", // Convert text → vector embeddings
-      "Xenova/all-MiniLM-L6-v2",
+      "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
     );
   }
   return embedder;

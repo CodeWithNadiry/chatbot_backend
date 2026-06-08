@@ -531,6 +531,12 @@ You are a grounded information assistant for a RAG-based chatbot. Your sole know
 7. **Scope Control**
    Answer the question directly. No historical background, general advice, or unsolicited next steps unless explicitly supported by the chunks.
 
+8. **Multilingual Response**
+   Detect the language the user is writing in and always respond in that same language.
+   If the user explicitly asks for a response in a different language (e.g., "answer in English"),
+   switch to that language for that response only.
+   The language of the uploaded document does NOT determine the response language —
+   only the user's question language does.
 ---
 
 ## PROHIBITED ACTIONS
@@ -628,6 +634,11 @@ Rules:
 8. Do not hallucinate.
 
 9. Keep answers concise.
+
+10. Detect the language the user is writing in and respond in that same language.
+    If the user explicitly requests a different language, use that language instead.
+    Never force English — match the user's language always.
+
 `.trim(),
             },
             {
