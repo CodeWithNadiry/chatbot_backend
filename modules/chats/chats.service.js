@@ -27,12 +27,18 @@ const SYSTEM_QUESTIONS = [
 ];
 
 function isSystemQuestion(question) {
-  const normalized = question.toLowerCase().trim().replace(/[?!.]+$/, "");
+  const normalized = question
+    .toLowerCase()
+    .trim()
+    .replace(/[?!.]+$/, "");
   return SYSTEM_QUESTIONS.some((q) => normalized.includes(q));
 }
 
 async function getSystemAnswer(question, userId) {
-  const normalized = question.toLowerCase().trim().replace(/[?!.]+$/, "");
+  const normalized = question
+    .toLowerCase()
+    .trim()
+    .replace(/[?!.]+$/, "");
 
   if (normalized.includes("who are you")) {
     return `I am your personal AI assistant powered by a Retrieval-Augmented Generation (RAG) system. I can read and understand documents you upload and answer questions based on their content. I also have Gmail integration, so I can help you draft and send emails directly from the chat.`;
@@ -57,7 +63,16 @@ async function getSystemAnswer(question, userId) {
       if (docs.length > 0) {
         docList =
           "\n\nHere are the documents you have uploaded:\n" +
-          docs.map((d, i) => `${i + 1}. ${d.fileName}`).join("\n");
+          docs
+            .map((d, i) => {
+              const clean = d.fileName
+                .replace(/^\d+[-_]/, "") // remove leading timestamp like 1780914075386-
+                .replace(/[-_]/g, " ") // replace - and _ with spaces
+                .replace(/\.[^.]+$/, "") // remove file extension like .pdf
+                .trim();
+              return `${i + 1}. ${clean}`;
+            })
+            .join("\n");
       } else {
         docList =
           "\n\nYou have not uploaded any documents yet. Go to the **Documents** section to upload your files.";
@@ -96,7 +111,12 @@ export const chatService = {
           });
         }
 
-        await Message.create({ conversationId, role: "user", model: null, content: question });
+        await Message.create({
+          conversationId,
+          role: "user",
+          model: null,
+          content: question,
+        });
         await Message.create({
           conversationId,
           role: "assistant",
@@ -160,7 +180,7 @@ export const chatService = {
     const chatHistory = previousMessages
       .map(
         (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`
+          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
       )
       .join("\n");
 
@@ -194,7 +214,7 @@ export const chatService = {
           embedding: `[${embedding.join(",")}]`,
         },
         type: QueryTypes.SELECT,
-      }
+      },
     );
 
     const relevantResults = results.filter((r) => r.similarity >= 0.3);
@@ -246,7 +266,6 @@ export const chatService = {
   // STREAMING CHAT (MAIN FEATURE)
   // =========================
   async handleStream({ question, conversationId, userId, res }) {
-
     // ✅ System question intercept (before RAG and tool detection)
     if (isSystemQuestion(question)) {
       const systemAnswer = await getSystemAnswer(question, userId);
@@ -262,7 +281,11 @@ export const chatService = {
           });
         }
 
-        await Message.create({ conversationId, role: "user", content: question });
+        await Message.create({
+          conversationId,
+          role: "user",
+          content: question,
+        });
         await Message.create({
           conversationId,
           role: "assistant",
@@ -334,7 +357,7 @@ export const chatService = {
     const chatHistory = previousMessages
       .map(
         (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`
+          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
       )
       .join("\n");
 
@@ -357,7 +380,7 @@ export const chatService = {
           embedding: `[${embedding.join(",")}]`,
         },
         type: QueryTypes.SELECT,
-      }
+      },
     );
 
     const relevantResults = results.filter((r) => r.similarity >= 0.3);
@@ -417,7 +440,7 @@ export const chatService = {
     message,
     question,
     toolName,
-    conversationId
+    conversationId,
   ) {
     const output = await sendEmail(userId, { to, subject, message });
 
@@ -546,7 +569,7 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
           temperature: 0.4,
           max_tokens: 512,
         }),
-      }
+      },
     );
 
     if (!response.ok) {
@@ -626,7 +649,7 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
           temperature: 0.4,
           max_tokens: 512,
         }),
-      }
+      },
     );
 
     if (!response.ok || !response.body) {
@@ -696,7 +719,7 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
           temperature: 0.2,
           max_tokens: 20,
         }),
-      }
+      },
     );
 
     if (!res.ok) return "";
