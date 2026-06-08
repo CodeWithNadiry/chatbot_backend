@@ -107,16 +107,17 @@ export const chatService = {
       }
     );
 
-    const relevantResults = results.filter((r) => r.similarity >= 0.5);
+    const relevantResults = results.filter((r) => r.similarity >= 0.3);
     const finalResults =
       relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
+    // ✅ Guard: only block if ALL top results are extremely irrelevant
+    const bestSimilarity = results[0]?.similarity ?? 0;
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
 
-    // ✅ Guard: skip LLM if no relevant context found
-    if (!context || context.trim() === "") {
+    if (!context || context.trim() === "" || bestSimilarity < 0.15) {
       await Message.create({
         conversationId,
         role: "assistant",
@@ -237,16 +238,17 @@ export const chatService = {
       }
     );
 
-    const relevantResults = results.filter((r) => r.similarity >= 0.5);
+    const relevantResults = results.filter((r) => r.similarity >= 0.3);
     const finalResults =
       relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
 
+    // ✅ Guard: only block if ALL top results are extremely irrelevant
+    const bestSimilarity = results[0]?.similarity ?? 0;
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
 
-    // ✅ Guard: skip LLM stream if no relevant context found
-    if (!context || context.trim() === "") {
+    if (!context || context.trim() === "" || bestSimilarity < 0.15) {
       await Message.create({
         conversationId,
         role: "assistant",
@@ -382,9 +384,12 @@ User: [question]
 ## CORE BEHAVIOR
 
 1. **Grounded Claims Only**
-   State only facts present in the chunks or chat history. If the answer is not in the chunks, say clearly: "I do not have enough information in the provided documents to answer that."
+   State only facts present in the chunks or chat history. If the answer is genuinely not in the chunks at all, say: "I do not have enough information in the provided documents to answer that."
 
-2. **Mandatory Inline Citations**
+2. **Semantic Flexibility**
+   The user may ask the same question using different words or phrasings. If the chunk clearly contains the answer — even if the exact keywords don't match — you MUST answer from it. For example, if a user asks "how many users" and the chunk says "monthly active users", treat these as the same concept and answer it.
+
+3. **Mandatory Inline Citations**
    Append chunk IDs immediately after every factual claim. Use [chk_001] or [chk_001, chk_003]. Cite once per idea or sentence, not per word.
 
 3. **Synthesize, Don't Copy**
@@ -494,25 +499,28 @@ Rules:
 
 1. Use ONLY provided context.
 
-2. If answer is not found in context,
-respond exactly:
+2. Be semantically flexible — if the user asks something using different words
+   but the context clearly contains the answer, answer it.
+   Example: "how many users" and "monthly active users" mean the same thing.
 
-"${NO_CONTEXT_REPLY}"
+3. Only refuse with:
+   "${NO_CONTEXT_REPLY}"
+   if the context genuinely does not contain ANY relevant information for the question.
 
-3. Never use outside knowledge.
+4. Never use outside knowledge.
 
-4. Always format responses using Markdown.
+5. Always format responses using Markdown.
 
-5. Use:
+6. Use:
    - ## Headings
    - Bullet lists
    - Numbered lists when needed
 
-6. Leave blank lines between sections.
+7. Leave blank lines between sections.
 
-7. Do not hallucinate.
+8. Do not hallucinate.
 
-8. Keep answers concise.
+9. Keep answers concise.
 `.trim(),
             },
             {
