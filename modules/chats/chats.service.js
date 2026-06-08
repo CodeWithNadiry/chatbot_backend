@@ -8,7 +8,11 @@ import { AppError } from "../../utils/AppError.js";
 import Groq from "groq-sdk";
 import { detectToolUse } from "../../utils/toolDetector.js";
 import { getLLMFinalAnswer } from "../../utils/llmAnswer.js";
-import {sendEmail} from '../../utils/gmailSender.js'
+import { sendEmail } from "../../utils/gmailSender.js";
+
+const NO_CONTEXT_REPLY =
+  "I do not have enough information in the uploaded documents to answer that question.";
+
 export const chatService = {
   // =========================
   // NORMAL CHAT (NON-STREAM)
@@ -29,40 +33,13 @@ export const chatService = {
         const emailDraft = {
           to: toolArgs.to,
           subject: toolArgs.subject,
-          message: toolArgs.message
-        }
+          message: toolArgs.message,
+        };
 
-        toolOutput = emailDraft
-        // toolOutput = await sendEmail(userId, toolArgs);
+        toolOutput = emailDraft;
       }
 
-      return {toolOutput}
-      // const reply = await getLLMFinalAnswer(question, toolName, toolOutput);
-
-      // let conversation;
-      // let conversationId = incomingConversationId;
-
-      // if (!conversationId) {
-      //   conversation = await Conversation.create({ userId, title: "" });
-      //   conversationId = conversation.conversationId;
-      // } else {
-      //   conversation = await Conversation.findOne({
-      //     where: { conversationId, userId },
-      //   });
-      // }
-
-      // await Message.create({ conversationId, role: "user", content: question });
-      // await Message.create({
-      //   conversationId,
-      //   role: "assistant",
-      //   model: "groq",
-      //   content: reply,
-      // });
-
-      // const title = await chatService.generateTitle(question, reply);
-      // if (title) await conversation.update({ title });
-
-      // return { answer: reply, conversationId, title };
+      return { toolOutput };
     }
 
     // Normal RAG flow
@@ -93,7 +70,7 @@ export const chatService = {
     const chatHistory = previousMessages
       .map(
         (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
+          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`
       )
       .join("\n");
 
@@ -112,22 +89,22 @@ export const chatService = {
 
     const results = await sequelize.query(
       `
-    SELECT
-      "chunkId",
-      content,
-      1 - (embedding <=> :embedding::vector) AS similarity
-    FROM chunks
-    WHERE "userId" = :userId
-    ORDER BY embedding <=> :embedding::vector
-    LIMIT 8
-    `,
+      SELECT
+        "chunkId",
+        content,
+        1 - (embedding <=> :embedding::vector) AS similarity
+      FROM chunks
+      WHERE "userId" = :userId
+      ORDER BY embedding <=> :embedding::vector
+      LIMIT 8
+      `,
       {
         replacements: {
           userId,
           embedding: `[${embedding.join(",")}]`,
         },
         type: QueryTypes.SELECT,
-      },
+      }
     );
 
     const relevantResults = results.filter((r) => r.similarity >= 0.5);
@@ -137,6 +114,24 @@ export const chatService = {
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
+
+    // ✅ Guard: skip LLM if no relevant context found
+    if (!context || context.trim() === "") {
+      await Message.create({
+        conversationId,
+        role: "assistant",
+        model: "Qwen/Qwen2.5-7B-Instruct",
+        content: NO_CONTEXT_REPLY,
+      });
+
+      let title = conversation.title;
+      if (isNewConversation) {
+        title = await this.generateTitle(question, NO_CONTEXT_REPLY);
+        if (title) await conversation.update({ title });
+      }
+
+      return { answer: NO_CONTEXT_REPLY, conversationId, title };
+    }
 
     const answer = await this.callLLM(question, context, chatHistory);
 
@@ -156,6 +151,7 @@ export const chatService = {
 
     return { answer, conversationId, title };
   },
+
   // =========================
   // STREAMING CHAT (MAIN FEATURE)
   // =========================
@@ -171,42 +167,15 @@ export const chatService = {
         const emailDraft = {
           to: toolArgs.to,
           subject: toolArgs.subject,
-          message: toolArgs.message
-        }
+          message: toolArgs.message,
+        };
 
-        toolOutput = {emailDraft, toolName}
-        // toolOutput = await sendEmail(userId, toolArgs);
+        toolOutput = { emailDraft, toolName };
       }
 
       res.write(JSON.stringify(toolOutput));
       res.end();
       return;
-      // const reply = await getLLMFinalAnswer(question, toolName, toolOutput);
-
-      // let conversation;
-      // if (!conversationId) {
-      //   conversation = await Conversation.create({ userId, title: "" });
-      //   conversationId = conversation.conversationId;
-      // } else {
-      //   conversation = await Conversation.findOne({
-      //     where: { conversationId, userId },
-      //   });
-      // }
-
-      // await Message.create({ conversationId, role: "user", content: question });
-      // await Message.create({
-      //   conversationId,
-      //   role: "assistant",
-      //   model: "groq",
-      //   content: reply,
-      // });
-
-      // const title = await chatService.generateTitle(question, reply);
-      // if (title) await conversation.update({ title });
-
-      // res.write(reply);
-      // res.end();
-      // return;
     }
 
     // Normal RAG flow
@@ -242,7 +211,7 @@ export const chatService = {
     const chatHistory = previousMessages
       .map(
         (m) =>
-          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`,
+          `${m.role === "user" ? "User" : "Assistant"}: ${m.content.trim()}`
       )
       .join("\n");
 
@@ -250,22 +219,22 @@ export const chatService = {
 
     const results = await sequelize.query(
       `
-    SELECT
-      "chunkId",
-      content,
-      1 - (embedding <=> :embedding::vector) AS similarity
-    FROM chunks
-    WHERE "userId" = :userId
-    ORDER BY embedding <=> :embedding::vector
-    LIMIT 8
-    `,
+      SELECT
+        "chunkId",
+        content,
+        1 - (embedding <=> :embedding::vector) AS similarity
+      FROM chunks
+      WHERE "userId" = :userId
+      ORDER BY embedding <=> :embedding::vector
+      LIMIT 8
+      `,
       {
         replacements: {
           userId,
           embedding: `[${embedding.join(",")}]`,
         },
         type: QueryTypes.SELECT,
-      },
+      }
     );
 
     const relevantResults = results.filter((r) => r.similarity >= 0.5);
@@ -275,6 +244,25 @@ export const chatService = {
     const context = finalResults.length
       ? finalResults.map((r) => r.content).join("\n\n---\n\n")
       : "";
+
+    // ✅ Guard: skip LLM stream if no relevant context found
+    if (!context || context.trim() === "") {
+      await Message.create({
+        conversationId,
+        role: "assistant",
+        model: "Qwen/Qwen2.5-7B-Instruct",
+        content: NO_CONTEXT_REPLY,
+      });
+
+      if (isNew) {
+        const title = await this.generateTitle(question, NO_CONTEXT_REPLY);
+        if (title) await conversation.update({ title });
+      }
+
+      res.write(NO_CONTEXT_REPLY);
+      res.end();
+      return;
+    }
 
     let fullAnswer = "";
 
@@ -299,34 +287,43 @@ export const chatService = {
     return fullAnswer;
   },
 
-  async handleEmail(userId, to, subject, message, question, toolName, conversationId) {
-  const output = await sendEmail(userId, { to, subject, message });
+  async handleEmail(
+    userId,
+    to,
+    subject,
+    message,
+    question,
+    toolName,
+    conversationId
+  ) {
+    const output = await sendEmail(userId, { to, subject, message });
 
-  const reply = await getLLMFinalAnswer(question, toolName, output);
+    const reply = await getLLMFinalAnswer(question, toolName, output);
 
-  let conversation;
-  if (!conversationId) {
-    conversation = await Conversation.create({ userId, title: "" });
-    conversationId = conversation.conversationId;
-  } else {
-    conversation = await Conversation.findOne({
-      where: { conversationId, userId },
+    let conversation;
+    if (!conversationId) {
+      conversation = await Conversation.create({ userId, title: "" });
+      conversationId = conversation.conversationId;
+    } else {
+      conversation = await Conversation.findOne({
+        where: { conversationId, userId },
+      });
+    }
+
+    await Message.create({ conversationId, role: "user", content: question });
+    await Message.create({
+      conversationId,
+      role: "assistant",
+      model: "groq",
+      content: reply,
     });
-  }
 
-  await Message.create({ conversationId, role: "user", content: question });
-  await Message.create({
-    conversationId,
-    role: "assistant",
-    model: "groq",
-    content: reply,
-  });
+    const title = await chatService.generateTitle(question, reply);
+    if (title) await conversation.update({ title });
 
-  const title = await chatService.generateTitle(question, reply);
-  if (title) await conversation.update({ title });
+    return { reply, conversationId, title };
+  },
 
-  return { reply, conversationId, title };
-},
   // =========================
   // NORMAL LLM CALL
   // =========================
@@ -452,13 +449,15 @@ ${context}
 
 QUESTION:
 ${question}
+
+IMPORTANT: If the CONTEXT above does not contain relevant information to answer the question, you MUST respond only with: "${NO_CONTEXT_REPLY}" — Do NOT use your training knowledge under any circumstances.
               `.trim(),
             },
           ],
           temperature: 0.4,
           max_tokens: 512,
         }),
-      },
+      }
     );
 
     if (!response.ok) {
@@ -498,7 +497,7 @@ Rules:
 2. If answer is not found in context,
 respond exactly:
 
-"I do not have enough information in the uploaded documents to answer that question."
+"${NO_CONTEXT_REPLY}"
 
 3. Never use outside knowledge.
 
@@ -527,13 +526,15 @@ ${context}
 
 QUESTION:
 ${question}
+
+IMPORTANT: If the CONTEXT above does not contain relevant information to answer the question, you MUST respond only with: "${NO_CONTEXT_REPLY}" — Do NOT use your training knowledge under any circumstances.
               `.trim(),
             },
           ],
           temperature: 0.4,
           max_tokens: 512,
         }),
-      },
+      }
     );
 
     if (!response.ok || !response.body) {
@@ -603,7 +604,7 @@ ${question}
           temperature: 0.2,
           max_tokens: 20,
         }),
-      },
+      }
     );
 
     if (!res.ok) return "";

@@ -27,7 +27,7 @@ export async function sendEmail(userId, { to, subject, message }) {
     refresh_token: integration.refreshToken,
   });
 
-  oauth2Client.on("tokens", async (tokens) => {
+  oauth2Client.on("tokens", async (tokens) => { // This line of code sets up an event listener that automatically triggers whenever your OAuth client receives new authentication credentials. It ensures your application always uses the most up-to-date access credentials when making API requests on behalf of a user.
     if (tokens.access_token) {
       await integration.update({
         accessToken: tokens.access_token,
