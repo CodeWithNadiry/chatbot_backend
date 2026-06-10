@@ -19,6 +19,7 @@ export async function chatStream(req, res, next) {
 
     const { question, conversationId } = req.body;
     const userId = req.userId;
+    console.log(userId)
 
     await chatService.handleStream({
       question,
@@ -35,17 +36,23 @@ export async function chatStream(req, res, next) {
 
 export async function sendFinalEmail(req, res, next) {
   try {
-    const { to, subject, message, question, toolName, conversationId } = req.body;
-     
+    const { to, subject, message, question, toolName, conversationId } =
+      req.body;
+
     const result = await chatService.handleEmail(
-      req.userId, to, subject, message, question, toolName, conversationId
+      req.userId,
+      to,
+      subject,
+      message,
+      question,
+      toolName,
+      conversationId,
     );
     res.status(200).json(result);
   } catch (error) {
     next(error);
   }
 }
-
 
 export async function getAll(req, res, next) {
   try {

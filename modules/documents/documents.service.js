@@ -16,72 +16,78 @@ export const documentService = {
     validate(files);
 
     const results = await Promise.all(
-  files.map(async (file) => {
-    let document;
+      files.map(async (file) => {
+        let document;
 
-    try {
-      document = await documentService.createDocument(file, userId);
-      
-      const text = await extractText(file);
+        try {
+          document = await documentService.createDocument(file, userId);
 
-      if (!text) {
-        await document.update({ status: "failed" });
-        return document;
-      }
+          const text = await extractText(file);
 
-      await document.update({ status: "processing" });
+          if (!text) {
+            await document.update({ status: "failed" });
+            return document;
+          }
 
-      const chunks = await splitText(
-        text,
-        req.body.chunkSize || 1000,
-        req.body.chunkOverlap || 200
-      );
+          await document.update({ status: "processing" });
 
-      const embeddings = await Promise.all(
-        chunks.map((chunk) => generateEmbedding(chunk))
-      );
+          const chunks = await splitText(
+            text,
+            req.body.chunkSize || 1000,
+            req.body.chunkOverlap || 200,
+          );
 
-      await Promise.all(
-        chunks.map((chunk, index) =>
-          sequelize.query(
-            `
+          // const embeddings = await Promise.all(
+          //   chunks.map((chunk) => generateEmbedding(chunk))
+          // );
+
+          const embeddings = [];
+          for (const chunk of chunks) {
+            const embedding = await generateEmbedding(chunk);
+            embeddings.push(embedding);
+          }
+
+          await Promise.all(
+            chunks.map((chunk, index) =>
+              sequelize.query(
+                `
             INSERT INTO chunks
             ("userId", "documentId", "chunkIndex", content, embedding, metadata)
             VALUES ($1, $2, $3, $4, $5::vector, $6)
             `,
-            {
-              bind: [
-                userId,
-                document.documentId,
-                index,
-                chunk,
-                `[${embeddings[index].join(",")}]`,
                 {
-                  chunkSize: req.body.chunkSize,
-                  chunkOverlap: req.body.chunkOverlap,
+                  bind: [
+                    userId,
+                    document.documentId,
+                    index,
+                    chunk,
+                    `[${embeddings[index].join(",")}]`,
+                    {
+                      chunkSize: req.body.chunkSize,
+                      chunkOverlap: req.body.chunkOverlap,
+                    },
+                  ],
                 },
-              ],
-            }
-          )
-        )
-      );
+              ),
+            ),
+          );
 
-      await document.update({ status: "completed" });
+          await document.update({ status: "completed" });
 
-      return document;
-    } catch (err) {
-      if (document) {
-        await document.update({ status: "failed" });
-        return document;
-      }
+          return document;
+        } catch (err) {
+          if (document) {
+            await document.update({ status: "failed" });
+            return document;
+          }
 
-      return {
-        fileName: file.name,
-        status: "failed",
-      };
-    }
-  })
-);
+          return {
+            fileName: file.name,
+            status: "failed",
+          };
+        }
+      }),
+    );
 
     return {
       message: `document${files.length > 1 ? "s" : ""} uploaded successfully`,

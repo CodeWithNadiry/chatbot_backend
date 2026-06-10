@@ -13,7 +13,6 @@ export async function handleCallback(req, res, next) {
   try {
     const { code, state: userId } = req.query;
 
-    console.log("Callback received — code:", code, "userId:", userId);
 
     if (!userId) {
       return res.status(400).json({ message: "Missing userId in state" });

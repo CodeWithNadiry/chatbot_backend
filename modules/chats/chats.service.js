@@ -6,13 +6,143 @@ import Document from "../../models/document.model.js";
 import { sequelize } from "../../db/client.js";
 import { QueryTypes } from "sequelize";
 import { AppError } from "../../utils/AppError.js";
-import Groq from "groq-sdk";
 import { detectToolUse } from "../../utils/toolDetector.js";
 import { getLLMFinalAnswer } from "../../utils/llmAnswer.js";
 import { sendEmail } from "../../utils/gmailSender.js";
 
 const NO_CONTEXT_REPLY =
   "I do not have enough information in the uploaded documents to answer that question.";
+
+// ==============================
+// LANGUAGE DETECTION (lightweight)
+// ==============================
+async function detectLanguage(text) {
+  // We ask the LLM to identify the language in one word.
+  // Fallback to "English" if anything fails.
+  try {
+    const response = await fetch(
+      "https://router.huggingface.co/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen2.5-7B-Instruct",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a language detector. Reply with ONLY the full English name of the language (e.g. English, German, French, Urdu, Arabic, Spanish, etc). No other text.",
+            },
+            {
+              role: "user",
+              content: `Detect the language of this text: "${text.slice(0, 200)}"`,
+            },
+          ],
+          temperature: 0.0,
+          max_tokens: 10,
+        }),
+      },
+    );
+    if (!response.ok) return "English";
+    const data = await response.json();
+    const lang = data?.choices?.[0]?.message?.content?.trim();
+    return lang || "English";
+  } catch {
+    return "English";
+  }
+}
+
+// ==============================
+// QUERY EXPANSION FOR BETTER RECALL
+// ==============================
+async function expandQuery(question) {
+  // Returns 2-3 alternative phrasings of the question to improve semantic search recall.
+  try {
+    const response = await fetch(
+      "https://router.huggingface.co/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen2.5-7B-Instruct",
+          messages: [
+            {
+              role: "system",
+              content:
+                'You are a query expansion assistant. Given a user question, return 2 alternative phrasings of the same question. Output ONLY a JSON array of strings, e.g. ["phrasing 1", "phrasing 2"]. No explanation.',
+            },
+            {
+              role: "user",
+              content: `Question: ${question}`,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 100,
+        }),
+      },
+    );
+    if (!response.ok) return [question];
+    const data = await response.json();
+    const raw = data?.choices?.[0]?.message?.content?.trim() || "[]";
+    const cleaned = raw.replace(/```json|```/g, "").trim();
+    const alternatives = JSON.parse(cleaned);
+    if (Array.isArray(alternatives)) {
+      return [question, ...alternatives];
+    }
+    return [question];
+  } catch {
+    return [question];
+  }
+}
+
+// ==============================
+// MULTI-QUERY VECTOR SEARCH
+// ==============================
+async function searchChunks(queries, userId) {
+  // Embed all query variants and merge results, deduplicating by chunkId, keeping highest similarity.
+  const seen = new Map(); // chunkId -> best result
+
+  for (const q of queries) {
+    const embedding = await generateEmbedding(q);
+    if (!Array.isArray(embedding) || embedding.length === 0) continue;
+
+    const results = await sequelize.query(
+      `
+      SELECT
+        "chunkId",
+        content,
+        1 - (embedding <=> :embedding::vector) AS similarity
+      FROM chunks
+      WHERE "userId" = :userId
+      ORDER BY embedding <=> :embedding::vector
+      LIMIT 12
+      `,
+      {
+        replacements: {
+          userId,
+          embedding: `[${embedding.join(",")}]`,
+        },
+        type: QueryTypes.SELECT,
+      },
+    );
+
+    for (const row of results) {
+      const existing = seen.get(row.chunkId);
+      if (!existing || row.similarity > existing.similarity) {
+        seen.set(row.chunkId, row);
+      }
+    }
+  }
+
+  // Sort merged results by similarity descending
+  return Array.from(seen.values()).sort((a, b) => b.similarity - a.similarity);
+}
 
 // =========================
 // SYSTEM QUESTION DETECTOR
@@ -66,9 +196,9 @@ async function getSystemAnswer(question, userId) {
           docs
             .map((d, i) => {
               const clean = d.fileName
-                .replace(/^\d+[-_]/, "") // remove leading timestamp like 1780914075386-
-                .replace(/[-_]/g, " ") // replace - and _ with spaces
-                .replace(/\.[^.]+$/, "") // remove file extension like .pdf
+                .replace(/^\d+[-_]/, "")
+                .replace(/[-_]/g, " ")
+                .replace(/\.[^.]+$/, "")
                 .trim();
               return `${i + 1}. ${clean}`;
             })
@@ -87,6 +217,45 @@ async function getSystemAnswer(question, userId) {
   return null;
 }
 
+// =========================
+// SYSTEM PROMPT BUILDER
+// =========================
+function buildSystemPrompt(detectedLanguage) {
+  return `
+You are a strict RAG (Retrieval-Augmented Generation) assistant. You MUST follow every rule below without exception.
+
+## ABSOLUTE RULE — KNOWLEDGE SOURCE
+- You are FORBIDDEN from using ANY knowledge from your training data.
+- You may ONLY use information that is explicitly present in the CONTEXT CHUNKS provided in the user message.
+- If the answer is not clearly present in the context chunks, you MUST respond with this exact sentence and nothing else:
+  "${NO_CONTEXT_REPLY}"
+- This rule applies even if you "know" the answer from training — that knowledge is PROHIBITED here.
+
+## ABSOLUTE RULE — LANGUAGE
+- The user's question is written in: **${detectedLanguage}**
+- You MUST write your ENTIRE response in **${detectedLanguage}**.
+- Do NOT use English or any other language unless ${detectedLanguage} is English.
+- If the user explicitly says "answer in [language]" in their question, use that language instead for this turn only.
+- The language of the documents or context does NOT affect your response language — only the user's question language does.
+
+## SEMANTIC FLEXIBILITY
+- Match questions to context semantically, not just by exact keyword.
+- Example: "how many users" and "monthly active users" refer to the same concept — answer it from context if present.
+
+## FORMATTING
+- Use Markdown: ## headings, bullet lists, numbered lists.
+- Leave blank lines between sections.
+- Keep answers concise and well-structured.
+- Never write lists as plain paragraphs.
+
+## STRICTLY PROHIBITED
+- No hallucination or use of training knowledge.
+- No preambles like "Based on the documents..." or "As an AI...".
+- No unsolicited advice or opinions.
+- No response without grounding in the provided context.
+  `.trim();
+}
+
 export const chatService = {
   // =========================
   // NORMAL CHAT (NON-STREAM)
@@ -95,7 +264,6 @@ export const chatService = {
     const { question, conversationId: incomingConversationId } = req.body;
     const userId = req.userId;
 
-    // ✅ System question intercept (before RAG and tool detection)
     if (isSystemQuestion(question)) {
       const systemAnswer = await getSystemAnswer(question, userId);
       if (systemAnswer) {
@@ -131,28 +299,24 @@ export const chatService = {
       }
     }
 
-    // Tool detection
     const toolResult = await detectToolUse(question);
 
     if (toolResult) {
       const { toolName, toolArgs } = toolResult;
-
-      let toolOutput = "";
-
       if (toolName === "send_email") {
-        const emailDraft = {
-          to: toolArgs.to,
-          subject: toolArgs.subject,
-          message: toolArgs.message,
+        return {
+          toolOutput: {
+            emailDraft: {
+              to: toolArgs.to,
+              subject: toolArgs.subject,
+              message: toolArgs.message,
+            },
+            toolName,
+          },
         };
-
-        toolOutput = emailDraft;
       }
-
-      return { toolOutput };
     }
 
-    // Normal RAG flow
     let conversation;
     let isNewConversation = false;
     let conversationId = incomingConversationId;
@@ -165,10 +329,7 @@ export const chatService = {
       conversation = await Conversation.findOne({
         where: { conversationId, userId },
       });
-
-      if (!conversation) {
-        throw new AppError("Conversation not found", 404);
-      }
+      if (!conversation) throw new AppError("Conversation not found", 404);
     }
 
     const previousMessages = await Message.findAll({
@@ -191,42 +352,17 @@ export const chatService = {
       content: question,
     });
 
-    const embedding = await generateEmbedding(question);
+    // Detect language and expand query in parallel
+    const [detectedLanguage, queries] = await Promise.all([
+      detectLanguage(question),
+      expandQuery(question),
+    ]);
 
-    if (!Array.isArray(embedding) || embedding.length === 0) {
-      throw new AppError("Invalid embedding format", 500);
-    }
-
-    const results = await sequelize.query(
-      `
-      SELECT
-        "chunkId",
-        content,
-        1 - (embedding <=> :embedding::vector) AS similarity
-      FROM chunks
-      WHERE "userId" = :userId
-      ORDER BY embedding <=> :embedding::vector
-      LIMIT 8
-      `,
-      {
-        replacements: {
-          userId,
-          embedding: `[${embedding.join(",")}]`,
-        },
-        type: QueryTypes.SELECT,
-      },
-    );
-
-    const relevantResults = results.filter((r) => r.similarity >= 0.3);
-    const finalResults =
-      relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
-
+    const results = await searchChunks(queries, userId);
     const bestSimilarity = results[0]?.similarity ?? 0;
-    const context = finalResults.length
-      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
-      : "";
 
-    if (!context || context.trim() === "" || bestSimilarity < 0.15) {
+    // FIX: raised threshold from 0.15 to 0.4 to prevent training-knowledge leakage
+    if (!results.length || bestSimilarity < 0.4) {
       await Message.create({
         conversationId,
         role: "assistant",
@@ -243,7 +379,18 @@ export const chatService = {
       return { answer: NO_CONTEXT_REPLY, conversationId, title };
     }
 
-    const answer = await this.callLLM(question, context, chatHistory);
+    // FIX: lowered relevance filter from 0.3 to 0.25 for better semantic recall
+    const relevantResults = results.filter((r) => r.similarity >= 0.25);
+    const finalResults =
+      relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
+    const context = finalResults.map((r) => r.content).join("\n\n---\n\n");
+
+    const answer = await this.callLLM(
+      question,
+      context,
+      chatHistory,
+      detectedLanguage,
+    );
 
     await Message.create({
       conversationId,
@@ -253,7 +400,6 @@ export const chatService = {
     });
 
     let title = conversation.title;
-
     if (isNewConversation) {
       title = await this.generateTitle(question, answer);
       if (title) await conversation.update({ title });
@@ -263,10 +409,9 @@ export const chatService = {
   },
 
   // =========================
-  // STREAMING CHAT (MAIN FEATURE)
+  // STREAMING CHAT
   // =========================
   async handleStream({ question, conversationId, userId, res }) {
-    // ✅ System question intercept (before RAG and tool detection)
     if (isSystemQuestion(question)) {
       const systemAnswer = await getSystemAnswer(question, userId);
       if (systemAnswer) {
@@ -302,29 +447,25 @@ export const chatService = {
       }
     }
 
-    // Tool detection
     const toolResult = await detectToolUse(question);
     if (toolResult) {
       const { toolName, toolArgs } = toolResult;
-
-      let toolOutput = "";
-
       if (toolName === "send_email") {
-        const emailDraft = {
-          to: toolArgs.to,
-          subject: toolArgs.subject,
-          message: toolArgs.message,
-        };
-
-        toolOutput = { emailDraft, toolName };
+        res.write(
+          JSON.stringify({
+            emailDraft: {
+              to: toolArgs.to,
+              subject: toolArgs.subject,
+              message: toolArgs.message,
+            },
+            toolName,
+          }),
+        );
       }
-
-      res.write(JSON.stringify(toolOutput));
       res.end();
       return;
     }
 
-    // Normal RAG flow
     let conversation;
     let isNew = false;
 
@@ -336,17 +477,10 @@ export const chatService = {
       conversation = await Conversation.findOne({
         where: { conversationId, userId },
       });
-
-      if (!conversation) {
-        throw new AppError("Conversation not found", 404);
-      }
+      if (!conversation) throw new AppError("Conversation not found", 404);
     }
 
-    await Message.create({
-      conversationId,
-      role: "user",
-      content: question,
-    });
+    await Message.create({ conversationId, role: "user", content: question });
 
     const previousMessages = await Message.findAll({
       where: { conversationId },
@@ -361,38 +495,17 @@ export const chatService = {
       )
       .join("\n");
 
-    const embedding = await generateEmbedding(question);
+    // Detect language and expand query in parallel
+    const [detectedLanguage, queries] = await Promise.all([
+      detectLanguage(question),
+      expandQuery(question),
+    ]);
 
-    const results = await sequelize.query(
-      `
-      SELECT
-        "chunkId",
-        content,
-        1 - (embedding <=> :embedding::vector) AS similarity
-      FROM chunks
-      WHERE "userId" = :userId
-      ORDER BY embedding <=> :embedding::vector
-      LIMIT 8
-      `,
-      {
-        replacements: {
-          userId,
-          embedding: `[${embedding.join(",")}]`,
-        },
-        type: QueryTypes.SELECT,
-      },
-    );
-
-    const relevantResults = results.filter((r) => r.similarity >= 0.3);
-    const finalResults =
-      relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
-
+    const results = await searchChunks(queries, userId);
     const bestSimilarity = results[0]?.similarity ?? 0;
-    const context = finalResults.length
-      ? finalResults.map((r) => r.content).join("\n\n---\n\n")
-      : "";
 
-    if (!context || context.trim() === "" || bestSimilarity < 0.15) {
+    // FIX: raised threshold from 0.15 to 0.4
+    if (!results.length || bestSimilarity < 0.4) {
       await Message.create({
         conversationId,
         role: "assistant",
@@ -410,12 +523,24 @@ export const chatService = {
       return;
     }
 
+    // FIX: lowered relevance filter from 0.3 to 0.25
+    const relevantResults = results.filter((r) => r.similarity >= 0.25);
+    const finalResults =
+      relevantResults.length > 0 ? relevantResults : results.slice(0, 3);
+    const context = finalResults.map((r) => r.content).join("\n\n---\n\n");
+
     let fullAnswer = "";
 
-    await this.callLLMStream(question, context, chatHistory, (token) => {
-      fullAnswer += token;
-      res.write(token);
-    });
+    await this.callLLMStream(
+      question,
+      context,
+      chatHistory,
+      detectedLanguage,
+      (token) => {
+        fullAnswer += token;
+        res.write(token);
+      },
+    );
 
     await Message.create({
       conversationId,
@@ -443,7 +568,6 @@ export const chatService = {
     conversationId,
   ) {
     const output = await sendEmail(userId, { to, subject, message });
-
     const reply = await getLLMFinalAnswer(question, toolName, output);
 
     let conversation;
@@ -473,7 +597,7 @@ export const chatService = {
   // =========================
   // NORMAL LLM CALL
   // =========================
-  async callLLM(question, context, chatHistory) {
+  async callLLM(question, context, chatHistory, detectedLanguage) {
     const response = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
@@ -487,74 +611,8 @@ export const chatService = {
           messages: [
             {
               role: "system",
-              content: `
-⚠️ CITATION RULE — NON-NEGOTIABLE:
-Append chunk IDs immediately after every factual claim.
-No citation = do not include the claim.
-Never use preambles like "Based on the documents..." or "As an AI...".
-Jump straight to the answer.
-
-⚠️ FORMATTING RULE — NON-NEGOTIABLE:
-Always use proper Markdown formatting:
-- Use bullet points (- item) or numbered lists (1. item) for any list of items.
-- Use ## for section headings.
-- Never write lists as plain paragraphs with bold labels.
-- Always add a blank line between list items.
-- Never start a response with "Based on..." or "It seems...".
-
----
-
-You are a grounded information assistant for a RAG-based chatbot. Your sole knowledge source is the retrieved text chunks and the chat history provided in each turn. Do not use training knowledge outside those sources.
-
----
-
-## CORE BEHAVIOR
-
-1. **Grounded Claims Only**
-   State only facts present in the chunks or chat history. If the answer is genuinely not in the chunks at all, say: "I do not have enough information in the provided documents to answer that."
-
-2. **Semantic Flexibility**
-   The user may ask the same question using different words or phrasings. If the chunk clearly contains the answer — even if the exact keywords don't match — you MUST answer from it. For example, if a user asks "how many users" and the chunk says "monthly active users", treat these as the same concept and answer it.
-
-3. **Mandatory Inline Citations**
-   Append chunk IDs immediately after every factual claim. Use [chk_001] or [chk_001, chk_003]. Cite once per idea or sentence, not per word.
-
-4. **Synthesize, Don't Copy**
-   Paraphrase in your own words. Do not paste large verbatim passages unless the user explicitly requests a direct quote.
-
-5. **Explicit Gaps**
-   If chunks partially answer, provide what you found, then state clearly: "The chunks do not mention [specific missing detail]."
-
-6. **Conflicting Information**
-   If chunks disagree, present both views with their respective citations. Do not reconcile unless the chunks themselves explain how.
-
-7. **Scope Control**
-   Answer the question directly. No historical background, general advice, or unsolicited next steps unless explicitly supported by the chunks.
-
-8. **Multilingual Response**
-   Detect the language the user is writing in and always respond in that same language.
-   If the user explicitly asks for a response in a different language (e.g., "answer in English"),
-   switch to that language for that response only.
-   The language of the uploaded document does NOT determine the response language —
-   only the user's question language does.
----
-
-## PROHIBITED ACTIONS
-
-- Do NOT answer from general knowledge when chunks are missing or irrelevant.
-- Do NOT summarize off-topic chunks when none are relevant to the question.
-- Do NOT add advice, opinions, or inferences not grounded in chunk content.
-- Do NOT use preambles like "Based on the documents..." or "As an AI...". Jump straight to the answer.
-- Do NOT produce any sentence without a [chk_XXX] citation attached.
-
----
-
-## CHAT HISTORY USAGE
-
-- You may reference prior messages in the conversation to maintain context.
-- Do not treat chat history as a source of new facts unless those facts were originally grounded in chunk citations.
-- If the user refers to something from earlier in the conversation, acknowledge it using chat history but still cite chunks for any factual claims.
-`.trim(),
+              // FIX: language is now injected into the system prompt directly
+              content: buildSystemPrompt(detectedLanguage),
             },
             {
               role: "user",
@@ -562,35 +620,40 @@ You are a grounded information assistant for a RAG-based chatbot. Your sole know
 CHAT HISTORY:
 ${chatHistory}
 
-CONTEXT:
+CONTEXT CHUNKS (your ONLY allowed knowledge source):
 ${context}
 
 QUESTION:
 ${question}
 
-IMPORTANT: If the CONTEXT above does not contain relevant information to answer the question, you MUST respond only with: "${NO_CONTEXT_REPLY}" — Do NOT use your training knowledge under any circumstances.
               `.trim(),
             },
           ],
-          temperature: 0.4,
+          temperature: 0.3,
           max_tokens: 512,
         }),
       },
     );
 
     if (!response.ok) {
-      throw new Error(await response.text());
+      const errorText = await response.text();
+      throw new Error(`LLM request failed: ${errorText}`);
     }
 
     const data = await response.json();
-
-    return data?.choices?.[0]?.message?.content || "No response";
+    return data?.choices?.[0]?.message?.content || NO_CONTEXT_REPLY;
   },
 
   // =========================
   // STREAMING LLM CALL
   // =========================
-  async callLLMStream(question, context, chatHistory, onToken) {
+  async callLLMStream(
+    question,
+    context,
+    chatHistory,
+    detectedLanguage,
+    onToken,
+  ) {
     const response = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
@@ -605,41 +668,8 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
           messages: [
             {
               role: "system",
-              content: `
-You are a grounded RAG assistant.
-
-Rules:
-
-1. Use ONLY provided context.
-
-2. Be semantically flexible — if the user asks something using different words
-   but the context clearly contains the answer, answer it.
-   Example: "how many users" and "monthly active users" mean the same thing.
-
-3. Only refuse with:
-   "${NO_CONTEXT_REPLY}"
-   if the context genuinely does not contain ANY relevant information for the question.
-
-4. Never use outside knowledge.
-
-5. Always format responses using Markdown.
-
-6. Use:
-   - ## Headings
-   - Bullet lists
-   - Numbered lists when needed
-
-7. Leave blank lines between sections.
-
-8. Do not hallucinate.
-
-9. Keep answers concise.
-
-10. Detect the language the user is writing in and respond in that same language.
-    If the user explicitly requests a different language, use that language instead.
-    Never force English — match the user's language always.
-
-`.trim(),
+              // FIX: language is now injected into the system prompt directly
+              content: buildSystemPrompt(detectedLanguage),
             },
             {
               role: "user",
@@ -647,29 +677,28 @@ Rules:
 CHAT HISTORY:
 ${chatHistory}
 
-CONTEXT:
+CONTEXT CHUNKS (your ONLY allowed knowledge source):
 ${context}
 
 QUESTION:
 ${question}
 
-IMPORTANT: If the CONTEXT above does not contain relevant information to answer the question, you MUST respond only with: "${NO_CONTEXT_REPLY}" — Do NOT use your training knowledge under any circumstances.
               `.trim(),
             },
           ],
-          temperature: 0.4,
+          temperature: 0.3,
           max_tokens: 512,
         }),
       },
     );
 
     if (!response.ok || !response.body) {
-      throw new Error(await response.text());
+      const errorText = await response.text();
+      throw new Error(`LLM stream request failed: ${errorText}`);
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-
     let buffer = "";
     let fullText = "";
 
@@ -678,25 +707,26 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-
       const lines = buffer.split("\n");
-      buffer = lines.pop();
+      buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        if (!line.trim()) continue;
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+
+        const clean = trimmed.slice(5).trim();
+        if (clean === "[DONE]") continue;
 
         try {
-          const clean = line.replace("data: ", "");
-          if (clean.includes("[DONE]")) continue;
-
           const json = JSON.parse(clean);
           const token = json?.choices?.[0]?.delta?.content;
-
           if (token) {
             fullText += token;
             onToken?.(token);
           }
-        } catch (e) {}
+        } catch {
+          // skip malformed SSE lines
+        }
       }
     }
 
@@ -734,7 +764,6 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
     );
 
     if (!res.ok) return "";
-
     const data = await res.json();
     return data?.choices?.[0]?.message?.content?.trim() || "";
   },
@@ -760,10 +789,7 @@ IMPORTANT: If the CONTEXT above does not contain relevant information to answer 
       order: [[Message, "createdAt", "DESC"]],
     });
 
-    if (!conversation) {
-      throw new AppError("Conversation not found", 404);
-    }
-
+    if (!conversation) throw new AppError("Conversation not found", 404);
     return conversation;
   },
 };
