@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import { config } from "dotenv";
-import fs from "fs";
 import routes from './routes/index.js'
 import { connectDB } from "./db/client.js";
 import { initModels } from "./models/index.js";
@@ -10,10 +9,6 @@ import { errorHandler } from "./middleware/errorHandler.js";
 config(); // loads .env
 
 const app = express();
-
-if (!fs.existsSync("uploads/")) {
-  fs.mkdirSync("uploads/");
-}
 
 // Middlware
 app.use(cors({
