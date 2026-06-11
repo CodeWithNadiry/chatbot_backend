@@ -451,6 +451,19 @@ export const chatService = {
     if (toolResult) {
       const { toolName, toolArgs } = toolResult;
       if (toolName === "send_email") {
+        // create conversation now so handleEmail reuses it
+        let conversation;
+        if (!conversationId) {
+          conversation = await Conversation.create({ userId, title: "" });
+          conversationId = conversation.conversationId;
+        }
+
+        await Message.create({
+          conversationId,
+          role: "user",
+          content: question,
+        });
+
         res.write(
           JSON.stringify({
             emailDraft: {
@@ -459,6 +472,7 @@ export const chatService = {
               message: toolArgs.message,
             },
             toolName,
+            conversationId, // ← send this to frontend
           }),
         );
       }
