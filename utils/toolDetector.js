@@ -60,8 +60,13 @@ export async function detectToolUse(question) {
             {
               role: "system",
               content: `You are a helpful assistant.
-If the user wants to send an email, use the send_email tool.
-Otherwise do not use any tool.
+ONLY use the send_email tool if ALL of these are true:
+1. The user explicitly mentions sending an email
+2. The user provides a specific email address (e.g. someone@gmail.com)
+3. The user provides a message or topic to send
+
+If ANY of these conditions is missing, do NOT use any tool.
+Regular questions, requests for information, or questions about topics are NEVER email requests.
 
 When composing the email:
 - The user's language is: ${detectedLanguage}
