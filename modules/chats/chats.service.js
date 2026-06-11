@@ -572,29 +572,22 @@ export const chatService = {
     return fullAnswer;
   },
 
-  async handleEmail(
-    userId,
-    to,
-    subject,
-    message,
-    question,
-    toolName,
-    conversationId,
-  ) {
+  async handleEmail(userId, to, subject, message, question, toolName, conversationId) {
     const output = await sendEmail(userId, { to, subject, message });
     const reply = await getLLMFinalAnswer(question, toolName, output);
 
+    // conversationId always exists now (created in handleStream)
+    // this is just a safety fallback
     let conversation;
     if (!conversationId) {
       conversation = await Conversation.create({ userId, title: "" });
       conversationId = conversation.conversationId;
+      await Message.create({ conversationId, role: "user", content: question });
     } else {
-      conversation = await Conversation.findOne({
-        where: { conversationId, userId },
-      });
+      conversation = await Conversation.findOne({ where: { conversationId, userId } });
     }
 
-    await Message.create({ conversationId, role: "user", content: question });
+    // ✅ only save assistant reply — user message already saved in handleStream
     await Message.create({
       conversationId,
       role: "assistant",
@@ -606,7 +599,7 @@ export const chatService = {
     if (title) await conversation.update({ title });
 
     return { reply, conversationId, title };
-  },
+},
 
   // =========================
   // NORMAL LLM CALL
