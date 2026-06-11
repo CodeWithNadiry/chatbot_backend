@@ -1,5 +1,6 @@
 import { documentService } from "./documents.service.js";
 
+
 export async function ingest(req, res, next) {
   try {
     const result = await documentService.ingestDocuments(req);

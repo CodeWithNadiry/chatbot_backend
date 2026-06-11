@@ -13,7 +13,7 @@ export const documentService = {
     const files = req.files;
     const userId = req.userId;
 
-    validate(files);
+    await validate(files);
 
     const results = await Promise.all(
       files.map(async (file) => {

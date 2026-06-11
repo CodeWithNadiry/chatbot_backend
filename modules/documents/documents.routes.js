@@ -5,7 +5,7 @@ import { upload } from "../../middleware/upload.js";
 import { uploadDocumentSchema } from "./documents.schema.js";
 import { isAuth } from "../../middleware/isAuth.js";
 const router = Router();
-
+console.log('running')
 router.post(
   "/upload",
   isAuth,
