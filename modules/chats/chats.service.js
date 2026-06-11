@@ -665,6 +665,9 @@ ${question}
         body: JSON.stringify({
           model: "Qwen/Qwen2.5-7B-Instruct",
           stream: true,
+          temperature: 0.3,
+          max_tokens: 300, // ← lowered from 512
+          frequency_penalty: 1.2,
           messages: [
             {
               role: "system",
@@ -686,8 +689,6 @@ ${question}
               `.trim(),
             },
           ],
-          temperature: 0.3,
-          max_tokens: 512,
         }),
       },
     );
